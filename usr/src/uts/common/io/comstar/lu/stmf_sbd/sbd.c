@@ -110,7 +110,7 @@ static dev_info_t	*sbd_dip;
 static uint32_t		sbd_lu_count = 0;
 
 /* Global property settings for the logical unit */
-char sbd_vendor_id[]	= "SUN     ";
+char sbd_vendor_id[]	= "OI      ";
 char sbd_product_id[]	= "COMSTAR         ";
 char sbd_revision[]	= "1.0 ";
 char *sbd_mgmt_url = NULL;

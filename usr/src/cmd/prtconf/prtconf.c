@@ -344,7 +344,7 @@ main(int argc, char *argv[])
 	 * we're probably on x86, default to Oracle.
 	 */
 	if (ret <= 1) {
-		(void) strncpy(hw_provider, "Oracle Corporation",
+		(void) strncpy(hw_provider, "Project OpenIndiana",
 		    sizeof (hw_provider));
 	}
 	(void) printf("System Configuration:  %s  %s\n", hw_provider,

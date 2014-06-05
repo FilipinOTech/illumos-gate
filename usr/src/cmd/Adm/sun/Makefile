@@ -52,8 +52,8 @@ clobber:
 
 motd:	FRC
 	@-$(ECHO) "rebuilding motd"
-	@$(RELEASE_BUILD)-$(ECHO) "The Illumos Project\tSunOS $(RELEASE)\t$(VERSION)\t$(RELEASE_DATE)" > motd
-	@$(NOT_RELEASE_BUILD)-$(ECHO) "The Illumos Project\tSunOS $(RELEASE)\t$(VERSION)\t`date +'%h. %d, %Y'`" > motd
+	@$(RELEASE_BUILD)-$(ECHO) "OpenIndiana (powered by illumos)    SunOS $(RELEASE)    $(VERSION)    $(RELEASE_DATE)" > motd
+	@$(NOT_RELEASE_BUILD)-$(ECHO) "OpenIndiana (powered by illumos)    SunOS $(RELEASE)    $(VERSION)    `date +'%h. %d, %Y'`" > motd
 	@$(NOT_RELEASE_BUILD)-$(ECHO) $(DEV_CM) | sed -e "s/@(#)//" >> motd
 	@-$(CAT) release_info >> motd
 

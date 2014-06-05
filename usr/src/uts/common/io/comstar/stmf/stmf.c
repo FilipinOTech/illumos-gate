@@ -6661,7 +6661,7 @@ stmf_dlun0_new_task(scsi_task_t *task, stmf_data_buf_t *dbuf)
 		p[4] = inq_page_length;
 		p[6] = 0x80;
 
-		(void) strncpy((char *)p+8, "SUN     ", 8);
+		(void) strncpy((char *)p+8, "OI      ", 8);
 		(void) strncpy((char *)p+16, "COMSTAR	       ", 16);
 		(void) strncpy((char *)p+32, "1.0 ", 4);
 

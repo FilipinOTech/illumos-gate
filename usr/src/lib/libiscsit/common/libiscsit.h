@@ -52,7 +52,7 @@ extern "C" {
  * Other distros using it need to change accordingly.
  */
 
-#define	DEFAULT_IQN	"iqn.2010-08.org.illumos:"
+#define	DEFAULT_IQN	"iqn.2010-09.org.openindiana:"
 
 /*
  * Object Hierarchy
