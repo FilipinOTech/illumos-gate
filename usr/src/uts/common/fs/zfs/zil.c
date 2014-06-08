@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2014 by Delphix. All rights reserved.
  */
 
 /* Portions Copyright 2010 Robert Milkowski */
@@ -137,9 +137,14 @@ int
 zil_bp_tree_add(zilog_t *zilog, const blkptr_t *bp)
 {
 	avl_tree_t *t = &zilog->zl_bp_tree;
-	const dva_t *dva = BP_IDENTITY(bp);
+	const dva_t *dva;
 	zil_bp_node_t *zn;
 	avl_index_t where;
+
+	if (BP_IS_EMBEDDED(bp))
+		return (0);
+
+	dva = BP_IDENTITY(bp);
 
 	if (avl_find(t, dva, &where) != NULL)
 		return (SET_ERROR(EEXIST));
@@ -630,7 +635,14 @@ zil_claim(const char *osname, void *txarg)
 
 	error = dmu_objset_own(osname, DMU_OST_ANY, B_FALSE, FTAG, &os);
 	if (error != 0) {
-		cmn_err(CE_WARN, "can't open objset for %s", osname);
+		/*
+		 * EBUSY indicates that the objset is inconsistent, in which
+		 * case it can not have a ZIL.
+		 */
+		if (error != EBUSY) {
+			cmn_err(CE_WARN, "can't open objset for %s, error %u",
+			    osname, error);
+		}
 		return (0);
 	}
 
@@ -831,7 +843,7 @@ zil_lwb_write_done(zio_t *zio)
 	ASSERT(BP_GET_BYTEORDER(zio->io_bp) == ZFS_HOST_BYTEORDER);
 	ASSERT(!BP_IS_GANG(zio->io_bp));
 	ASSERT(!BP_IS_HOLE(zio->io_bp));
-	ASSERT(zio->io_bp->blk_fill == 0);
+	ASSERT(BP_GET_FILL(zio->io_bp) == 0);
 
 	/*
 	 * Ensure the lwb buffer pointer is cleared before releasing

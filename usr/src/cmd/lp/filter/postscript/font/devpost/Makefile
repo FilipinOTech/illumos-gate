@@ -20,6 +20,8 @@
 # CDDL HEADER END
 #
 #
+# ident	"%Z%%M%	%I%	%E% SMI"
+#
 # Copyright (c) 1989 by Sun Microsystems, Inc.
 # Copyright 2014 Garrett D'Amore
 #
@@ -29,14 +31,15 @@
 include			../../../../Makefile.lp
 
 FONTFILES =		AB AI AR AX BI CB CI CO	\
-			CW CX GR HB HI HX JB JI	\
-			JR JX KB KI KR KX NB NI	\
+			CW CX GR HB HI HX WB WI	\
+			W  WX KB KI KR KX NB NI	\
 			NR NX PA PB PI PX S1 VB	\
 			VI VR VX ZD ZI B  H  I	\
 			R  S	
 FONTLNK1 =		G HM HK HL
 FONTLNK2 =		GI
 DESCFILE =		DESC
+TXTS =			DESC.big DESC.small S.big S.small LINKFILE
 
 FONTNAMES =		$(FONTFILES:%=%.name)
 FONTLNK1OUTS =		$(FONTLNK1:%=%.out)
@@ -61,9 +64,9 @@ FILEMODE =		0444
 
 .KEEP_STATE:
 
-all :			$(FONTOUTS) $(FONTNAMES) $(SUBDIRS)
+all :			$(TXTS) $(FONTOUTS) $(FONTNAMES) $(SUBDIRS)
 
-install:		$(FONTOUTS) $(FONTNAMES) \
+install:		$(TXTS) $(FONTOUTS) $(FONTNAMES) \
 			$(ROOTDEVPOST) $(ROOTFONTFILES) $(ROOTFONTNAMES) \
 			$(ROOTFONTOUTS) $(SUBDIRS)
 		

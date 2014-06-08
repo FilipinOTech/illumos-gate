@@ -2565,7 +2565,8 @@ ipadm_create_addr(ipadm_handle_t iph, ipadm_addrobj_t addr, uint32_t flags)
 			status = ipadm_errno2status(errno);
 			goto fail;
 		}
-		if (sockaddrcmp(&lifr.lifr_addr, &addr->ipadm_static_addr))
+		if (sockaddrcmp((struct sockaddr *)&lifr.lifr_addr,
+		    (struct sockaddr *)&addr->ipadm_static_addr))
 			return (IPADM_SUCCESS);
 	}
 
@@ -2853,8 +2854,6 @@ i_ipadm_create_dhcp(ipadm_handle_t iph, ipadm_addrobj_t addr, uint32_t flags)
 	ipadm_status_t	status;
 	ipadm_status_t	dh_status;
 
-	if (dhcp_start_agent(DHCP_IPC_MAX_WAIT) == -1)
-		return (IPADM_DHCP_START_ERROR);
 	/*
 	 * Create a new logical interface if needed; otherwise, just
 	 * use the 0th logical interface.
@@ -3354,9 +3353,6 @@ ipadm_refresh_addr(ipadm_handle_t iph, const char *aobjname,
 		if (status != IPADM_SUCCESS)
 			return (status);
 		if (inform) {
-			if (dhcp_start_agent(DHCP_IPC_MAX_WAIT) == -1)
-				return (IPADM_DHCP_START_ERROR);
-
 			ipaddr.ipadm_wait = IPADM_DHCP_WAIT_DEFAULT;
 			return (i_ipadm_op_dhcp(&ipaddr, DHCP_INFORM, NULL));
 		}
@@ -3418,9 +3414,6 @@ i_ipadm_validate_create_addr(ipadm_handle_t iph, ipadm_addrobj_t ipaddr,
 	if (!legacy && ipaddr->ipadm_lifnum != 0)
 		return (IPADM_INVALID_ARG);
 
-	if (legacy && ipaddr->ipadm_atype != IPADM_ADDR_STATIC)
-		return (IPADM_NOTSUP);
-
 	ifname = ipaddr->ipadm_ifname;
 
 	if (i_ipadm_is_ipmp(iph, ifname) || i_ipadm_is_under_ipmp(iph, ifname))
@@ -3450,7 +3443,7 @@ i_ipadm_validate_create_addr(ipadm_handle_t iph, ipadm_addrobj_t ipaddr,
 		return (status);
 	if (!a_exists && p_exists)
 		return (IPADM_OP_DISABLE_OBJ);
-	if ((flags & IPADM_OPT_PERSIST) && a_exists && !p_exists) {
+	if ((flags & IPADM_OPT_PERSIST) && af_exists && !p_exists) {
 		/*
 		 * If address has to be created persistently,
 		 * and the interface does not exist in the persistent
@@ -3546,12 +3539,19 @@ ipadm_enable_addr(ipadm_handle_t iph, const char *aobjname, uint32_t flags)
 		return (IPADM_INVALID_ARG);
 	}
 
-	/* Retrieve the address object information. */
-	status = i_ipadm_get_addrobj(iph, &ipaddr);
-	if (status != IPADM_SUCCESS)
+	/* Don't allow enabling of an already enabled address. */
+	if ((status = i_ipadm_get_addrobj(iph, &ipaddr)) == IPADM_SUCCESS) {
+		if (ipaddr.ipadm_flags & IPMGMT_ACTIVE)
+			return (IPADM_ADDROBJ_EXISTS);
+	} else if (status != IPADM_NOTFOUND) {
+		/*
+		 * IPADM_NOTFOUND is expected in the case where the address
+		 * object has not previously been enabled (e.g. the initial
+		 * enabling at boot failed for some reason).  All other errors
+		 * are actual failures.
+		 */
 		return (status);
-	if (ipaddr.ipadm_flags & IPMGMT_ACTIVE)
-		return (IPADM_ADDROBJ_EXISTS);
+	}
 
 	status = i_ipadm_get_db_addr(iph, NULL, aobjname, &addrnvl);
 	if (status != IPADM_SUCCESS)

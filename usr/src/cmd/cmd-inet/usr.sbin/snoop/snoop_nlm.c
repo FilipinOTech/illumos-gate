@@ -23,6 +23,9 @@
  * Copyright (c) 1991, 1998, 2001 by Sun Microsystems, Inc.
  * All rights reserved.
  */
+/*
+ * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ */
 
 /*
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.

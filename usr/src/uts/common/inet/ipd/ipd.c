@@ -1,4 +1,6 @@
 /*
+ * CDDL HEADER START
+ *
  * This file and its contents are supplied under the terms of the
  * Common Development and Distribution License ("CDDL"), version 1.0.
  * You may only use this file in accordance with the terms of version
@@ -7,9 +9,20 @@
  * A full copy of the text of the CDDL should have accompanied this
  * source.  A copy of the CDDL is also available via the Internet at
  * http://www.illumos.org/license/CDDL.
+ * See the License for the specific language governing permissions
+ * and limitations under the License.
+ *
+ * When distributing Covered Code, include this CDDL HEADER in each
+ * file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+ * If applicable, add the following below this CDDL HEADER, with the
+ * fields enclosed by brackets "[]" replaced with your own identifying
+ * information: Portions Copyright [yyyy] [name of copyright owner]
+ *
+ * CDDL HEADER END
  */
 /*
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
 /*
@@ -160,6 +173,7 @@
 #include <sys/stat.h>
 #include <sys/cmn_err.h>
 #include <sys/ddi.h>
+#include <sys/file.h>
 #include <sys/sunddi.h>
 #include <sys/modctl.h>
 #include <sys/kstat.h>
@@ -241,7 +255,7 @@ static unsigned int	ipd_max_delay = IPD_MAX_DELAY;	/* max delay in us */
 static kmutex_t		ipd_nsl_lock;		/* lock for the nestack list */
 static list_t		ipd_nsl;		/* list of netstacks */
 static kmutex_t		ipd_nactive_lock;	/* lock for nactive */
-static unsigned int	ipd_nactive; 		/* number of active netstacks */
+static unsigned int	ipd_nactive;		/* number of active netstacks */
 static int		ipd_nactive_fudge = 4;	/* amount to fudge by in list */
 
 /*
@@ -620,6 +634,7 @@ ipd_toggle_delay(ipd_netstack_t *ins, uint32_t delay)
 
 	return (rval);
 }
+
 static int
 ipd_toggle_drop(ipd_netstack_t *ins, int percent)
 {

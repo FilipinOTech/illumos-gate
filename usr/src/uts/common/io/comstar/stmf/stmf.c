@@ -65,7 +65,6 @@ static uint16_t stmf_rtpid_counter = 0;
 /* start messages at 1 */
 static uint64_t stmf_proxy_msg_id = 1;
 #define	MSG_ID_TM_BIT	0x8000000000000000
-#define	ALIGNED_TO_8BYTE_BOUNDARY(i)	(((i) + 7) & ~7)
 
 /*
  * When stmf_io_deadman_enabled is set to B_TRUE, we check that finishing up
@@ -192,7 +191,7 @@ volatile int	stmf_default_task_timeout = 75;
  */
 volatile int	stmf_allow_modunload = 0;
 
-volatile int stmf_max_nworkers = 256;
+volatile int stmf_max_nworkers = 1024;
 volatile int stmf_min_nworkers = 4;
 volatile int stmf_worker_scale_down_delay = 20;
 
@@ -203,11 +202,21 @@ volatile int stmf_drop_buf_counter = 0;
 
 #endif
 
+#define VENDOR_ID_LEN 8
+#define PRODUCT_ID_LEN 16
+#define REVISION_LEN 4
+
+char stmf_vendor_id[] = "DELPHIX ";
+char stmf_product_id[] = "COMSTAR	       ";
+char stmf_revision[] = "1.0 ";
+
 stmf_state_t		stmf_state;
 static stmf_lu_t	*dlun0;
 
+/* bit position of first zero in 4-bit value */
 static uint8_t stmf_first_zero[] =
 	{ 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 0xff };
+/* bit position of first 1 in 4-bit value */
 static uint8_t stmf_first_one[] =
 	{ 0xff, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0 };
 
@@ -781,6 +790,10 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 			ret = EINVAL;
 			break;
 		}
+
+		DTRACE_PROBE2(stmf__ioctl__set__stmf__state,
+		    int, cmd, stmf_state_desc_t *, ibuf);
+
 		ret = stmf_set_stmf_state((stmf_state_desc_t *)ibuf);
 		break;
 
@@ -799,6 +812,10 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 			ret = EINVAL;
 			break;
 		}
+
+		DTRACE_PROBE2(stmf__ioctl__set__alua__state, int, cmd,
+		    stmf_alua_state_desc_t *, ibuf);
+
 		ret = stmf_set_alua_state((stmf_alua_state_desc_t *)ibuf);
 		break;
 
@@ -815,11 +832,16 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 		ssi.st_rflags = STMF_RFLAG_USER_REQUEST;
 		ssi.st_additional_info = NULL;
 		std = (stmf_state_desc_t *)ibuf;
+
 		if ((ibuf == NULL) ||
 		    (iocd->stmf_ibuf_size < sizeof (stmf_state_desc_t))) {
 			ret = EINVAL;
 			break;
 		}
+
+		DTRACE_PROBE2(stmf__ioctl__set__lu__state, int, cmd,
+		    stmf_state_desc_t *, std);
+
 		p_id = std->ident;
 		mutex_enter(&stmf_state.stmf_lock);
 		if (stmf_state.stmf_inventory_locked) {
@@ -859,6 +881,10 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 			break;
 		}
 		stmf_set_props = (stmf_set_props_t *)ibuf;
+
+		DTRACE_PROBE2(stmf__ioctl__set__stmf__props, int, cmd,
+		    stmf_set_props_t *, stmf_set_props);
+
 		mutex_enter(&stmf_state.stmf_lock);
 		if ((stmf_set_props->default_lu_state_value ==
 		    STMF_STATE_OFFLINE) ||
@@ -887,6 +913,10 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 			ret = EINVAL;
 			break;
 		}
+
+		DTRACE_PROBE2(stmf__ioctl__set__target__port__state, int, cmd,
+		    stmf_state_desc_t *, std)
+
 		p_id = std->ident;
 		mutex_enter(&stmf_state.stmf_lock);
 		if (stmf_state.stmf_inventory_locked) {
@@ -942,6 +972,10 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 			ret = EINVAL;
 			break;
 		}
+
+		DTRACE_PROBE2(stmf__ioctl__add__hgtg__entry, int, cmd,
+		    stmf_group_op_data_t *, grp_entry);
+
 		if (grp_entry->group.name[0] == '*') {
 			ret = EINVAL;
 			break; /* not allowed */
@@ -973,6 +1007,10 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 			ret = EINVAL;
 			break;
 		}
+
+		DTRACE_PROBE2(stmf__ioctl__remove__hgtg__entry, int, cmd,
+		    stmf_group_op_data_t *, grp_entry);
+
 		if (grp_entry->group.name[0] == '*') {
 			ret = EINVAL;
 			break; /* not allowed */
@@ -1004,6 +1042,10 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 			ret = EINVAL;
 			break;
 		}
+
+		DTRACE_PROBE2(stmf__ioctl__create__hgtg, int, cmd,
+		    stmf_group_name_t *, grpname);
+
 		if (grpname->name[0] == '*') {
 			ret = EINVAL;
 			break; /* not allowed */
@@ -1030,6 +1072,10 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 			ret = EINVAL;
 			break;
 		}
+
+		DTRACE_PROBE2(stmf__ioctl__remove__hgtg, int, cmd,
+		    stmf_group_name_t *, grpname);
+
 		if (grpname->name[0] == '*') {
 			ret = EINVAL;
 			break; /* not allowed */
@@ -1052,8 +1098,17 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 			ret = EINVAL;
 			break;
 		}
+
+		/*
+		 * Expose the arguments as passed, prior to the changes that
+		 * happen below.  There are probes below to expose the
+		 * as-configured information.
+		 */
+		DTRACE_PROBE2(stmf__ioctl__av__view__entry, int, cmd,
+			    stmf_view_op_entry_t *, ve);
+
 		if (!ve->ve_lu_number_valid)
-			ve->ve_lu_nbr[2] = 0xFF;
+			stmf_set_auto_select_lun_num(ve->ve_lu_nbr);
 		if (ve->ve_all_hosts) {
 			ve->ve_host_group.name[0] = '*';
 			ve->ve_host_group.name_size = 1;
@@ -1068,6 +1123,8 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 			veid = 0xffffffff;
 		mutex_enter(&stmf_state.stmf_lock);
 		if (cmd == STMF_IOCTL_ADD_VIEW_ENTRY) {
+			DTRACE_PROBE2(stmf__ioctl__add__view__entry__pre__add,
+			    int, cmd, stmf_view_op_entry_t *, ve);
 			ret = stmf_add_ve(ve->ve_host_group.name,
 			    ve->ve_host_group.name_size,
 			    ve->ve_target_group.name,
@@ -1076,7 +1133,18 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 			    &veid,
 			    ve->ve_lu_nbr,
 			    &iocd->stmf_error);
+			/*
+			 * Adding a view entry with an auto-numbered LUN will
+			 * result in the value of the view entry's lu_nbr
+			 * changing.  Provide the information in the ve
+			 * post-add unconditionally here.
+			 */
+			DTRACE_PROBE2(stmf__ioctl__add__view__entry__post__add,
+			    int, cmd, stmf_view_op_entry_t *, ve);
+
 		} else {  /* STMF_IOCTL_VALIDATE_VIEW */
+			DTRACE_PROBE2(stmf__ioctl__validate__view, int, cmd,
+			    stmf_view_op_entry_t *, ve);
 			ret = stmf_validate_lun_ve(ve->ve_host_group.name,
 			    ve->ve_host_group.name_size,
 			    ve->ve_target_group.name,
@@ -1084,6 +1152,7 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 			    ve->ve_lu_nbr,
 			    &iocd->stmf_error);
 		}
+
 		mutex_exit(&stmf_state.stmf_lock);
 		if (ret == 0 &&
 		    (!ve->ve_ndx_valid || !ve->ve_lu_number_valid) &&
@@ -1100,6 +1169,12 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 				ve_ret->ve_lu_number_valid = 1;
 				bcopy(ve->ve_lu_nbr, ve_ret->ve_lu_nbr, 8);
 			}
+			/*
+			 * and also expose the information conditionally
+			 * returned to the caller.
+			 */
+			DTRACE_PROBE2(stmf__ioctl__add__view__entry__ve__ret,
+			    int, cmd, stmf_view_op_entry_t *, ve_ret);
 		}
 		break;
 	case STMF_IOCTL_REMOVE_VIEW_ENTRY:
@@ -1114,6 +1189,10 @@ stmf_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
 			ret = EINVAL;
 			break;
 		}
+
+		DTRACE_PROBE2(stmf__ioctl__remove__view__entry, int, cmd,
+		    stmf_view_op_entry_t *, ve);
+
 		if (!ve->ve_ndx_valid) {
 			ret = EINVAL;
 			break;
@@ -2199,7 +2278,7 @@ stmf_alloc(stmf_struct_id_t struct_id, int additional_size, int flags)
 		kmem_flag = KM_SLEEP;
 	}
 
-	additional_size = (additional_size + 7) & (~7);
+	additional_size = P2ROUNDUP(additional_size, 8);
 	stmf_size = stmf_sizes[struct_id].shared +
 	    stmf_sizes[struct_id].fw_private + additional_size;
 
@@ -3741,7 +3820,7 @@ stmf_register_itl_handle(stmf_lu_t *lu, uint8_t *lun,
 
 	mutex_enter(&stmf_state.stmf_lock);
 	rw_enter(iss->iss_lockp, RW_WRITER);
-	n = ((uint16_t)lun[1] | (((uint16_t)(lun[0] & 0x3F)) << 8));
+	n = stmf_lun_to_num_bounded(lun);
 	lun_map_ent = (stmf_lun_map_ent_t *)
 	    stmf_get_ent_from_map(iss->iss_sm, n);
 	if ((lun_map_ent == NULL) || (lun_map_ent->ent_lu != lu)) {
@@ -3897,7 +3976,7 @@ stmf_get_itl_handle(stmf_lu_t *lu, uint8_t *lun, stmf_scsi_session_t *ss,
 				break;
 		}
 	} else {
-		n = ((uint16_t)lun[1] | (((uint16_t)(lun[0] & 0x3F)) << 8));
+		n = stmf_lun_to_num_bounded(lun);
 		ent = (stmf_lun_map_ent_t *)
 		    stmf_get_ent_from_map(iss->iss_sm, n);
 		if (lu && (ent->ent_lu != lu))
@@ -4038,7 +4117,7 @@ stmf_task_alloc(struct stmf_local_port *lport, stmf_scsi_session_t *ss,
 	else
 		cdb_length = 16 + 7;
 	iss = (stmf_i_scsi_session_t *)ss->ss_stmf_private;
-	luNbr = ((uint16_t)lun[1] | (((uint16_t)(lun[0] & 0x3F)) << 8));
+	luNbr = stmf_lun_to_num_bounded(lun);
 	rw_enter(iss->iss_lockp, RW_READER);
 	lun_map_ent =
 	    (stmf_lun_map_ent_t *)stmf_get_ent_from_map(iss->iss_sm, luNbr);
@@ -4110,11 +4189,8 @@ stmf_task_alloc(struct stmf_local_port *lport, stmf_scsi_session_t *ss,
 		l[5] = lun[5];
 		l[6] = lun[6];
 		l[7] = lun[7];
-		task->task_cdb = (uint8_t *)task->task_port_private;
-		if ((ulong_t)(task->task_cdb) & 7ul) {
-			task->task_cdb = (uint8_t *)(((ulong_t)
-			    (task->task_cdb) + 7ul) & ~(7ul));
-		}
+		task->task_cdb = (uint8_t *)P2ROUNDUP(
+		    (ulong_t)task->task_port_private, 8);
 		itask = (stmf_i_scsi_task_t *)task->task_stmf_private;
 		itask->itask_cdb_buf_size = cdb_length;
 		mutex_init(&itask->itask_audit_mutex, NULL, MUTEX_DRIVER, NULL);
@@ -4237,7 +4313,7 @@ void
 stmf_check_freetask()
 {
 	stmf_i_lu_t *ilu;
-	clock_t	endtime = ddi_get_lbolt() + drv_usectohz(10000);
+	clock_t	endtime = ddi_get_lbolt() + MSEC_TO_TICK(10);
 
 	/* stmf_svc_ilu_draining may get changed after stmf_lock is released */
 	while ((ilu = stmf_state.stmf_svc_ilu_draining) != NULL) {
@@ -4266,7 +4342,7 @@ void
 stmf_do_ilu_timeouts(stmf_i_lu_t *ilu)
 {
 	clock_t l = ddi_get_lbolt();
-	clock_t ps = drv_usectohz(1000000);
+	clock_t ps = SEC_TO_TICK(1);
 	stmf_i_scsi_task_t *itask;
 	scsi_task_t *task;
 	uint32_t to;
@@ -4298,7 +4374,7 @@ void
 stmf_check_ilu_timing()
 {
 	stmf_i_lu_t *ilu;
-	clock_t	endtime = ddi_get_lbolt() + drv_usectohz(10000);
+	clock_t	endtime = ddi_get_lbolt() + MSEC_TO_TICK(10);
 
 	/* stmf_svc_ilu_timing may get changed after stmf_lock is released */
 	while ((ilu = stmf_state.stmf_svc_ilu_timing) != NULL) {
@@ -5078,7 +5154,7 @@ stmf_task_poll_lu(scsi_task_t *task, uint32_t timeout)
 	if (timeout == ITASK_DEFAULT_POLL_TIMEOUT) {
 		itask->itask_poll_timeout = ddi_get_lbolt() + 1;
 	} else {
-		clock_t t = drv_usectohz(timeout * 1000);
+		clock_t t = MSEC_TO_TICK(timeout);
 		if (t == 0)
 			t = 1;
 		itask->itask_poll_timeout = ddi_get_lbolt() + t;
@@ -5126,7 +5202,7 @@ stmf_task_poll_lport(scsi_task_t *task, uint32_t timeout)
 	if (timeout == ITASK_DEFAULT_POLL_TIMEOUT) {
 		itask->itask_poll_timeout = ddi_get_lbolt() + 1;
 	} else {
-		clock_t t = drv_usectohz(timeout * 1000);
+		clock_t t = MSEC_TO_TICK(timeout);
 		if (t == 0)
 			t = 1;
 		itask->itask_poll_timeout = ddi_get_lbolt() + t;
@@ -6137,15 +6213,15 @@ stmf_worker_init()
 		mutex_init(&w->worker_lock, NULL, MUTEX_DRIVER, NULL);
 		cv_init(&w->worker_cv, NULL, CV_DRIVER, NULL);
 	}
-	stmf_worker_mgmt_delay = drv_usectohz(20 * 1000);
+	stmf_worker_mgmt_delay = MSEC_TO_TICK(20);
 	stmf_workers_state = STMF_WORKERS_ENABLED;
 
 	/* Workers will be started by stmf_worker_mgmt() */
 
 	/* Lets wait for atleast one worker to start */
 	while (stmf_nworkers_cur == 0)
-		delay(drv_usectohz(20 * 1000));
-	stmf_worker_mgmt_delay = drv_usectohz(3 * 1000 * 1000);
+		delay(MSEC_TO_TICK(20));
+	stmf_worker_mgmt_delay = SEC_TO_TICK(3);
 }
 
 stmf_status_t
@@ -6158,17 +6234,17 @@ stmf_worker_fini()
 		return (STMF_SUCCESS);
 	ASSERT(stmf_workers);
 	stmf_workers_state = STMF_WORKERS_DISABLED;
-	stmf_worker_mgmt_delay = drv_usectohz(20 * 1000);
+	stmf_worker_mgmt_delay = MSEC_TO_TICK(20);
 	cv_signal(&stmf_state.stmf_cv);
 
-	sb = ddi_get_lbolt() + drv_usectohz(10 * 1000 * 1000);
+	sb = ddi_get_lbolt() + SEC_TO_TICK(10);
 	/* Wait for all the threads to die */
 	while (stmf_nworkers_cur != 0) {
 		if (ddi_get_lbolt() > sb) {
 			stmf_workers_state = STMF_WORKERS_ENABLED;
 			return (STMF_BUSY);
 		}
-		delay(drv_usectohz(100 * 1000));
+		delay(MSEC_TO_TICK(100));
 	}
 	for (i = 0; i < stmf_i_max_nworkers; i++) {
 		stmf_worker_t *w = &stmf_workers[i];
@@ -6199,7 +6275,7 @@ stmf_worker_task(void *arg)
 	uint8_t dec_qdepth;
 
 	w = (stmf_worker_t *)arg;
-	wait_ticks = drv_usectohz(10000);
+	wait_ticks = MSEC_TO_TICK(10);
 
 	DTRACE_PROBE1(worker__create, stmf_worker_t, w);
 	mutex_enter(&w->worker_lock);
@@ -6452,7 +6528,7 @@ stmf_worker_mgmt()
 		goto worker_mgmt_trigger_change;
 	}
 
-	tps = drv_usectohz(1 * 1000 * 1000);
+	tps = SEC_TO_TICK(1);
 	if ((stmf_wm_last != 0) &&
 	    ((d = ddi_get_lbolt() - stmf_wm_last) > tps)) {
 		qd = 0;
@@ -6486,8 +6562,7 @@ stmf_worker_mgmt()
 			stmf_worker_scale_down_qd = qd;
 		if (stmf_worker_scale_down_timer == 0) {
 			stmf_worker_scale_down_timer = ddi_get_lbolt() +
-			    drv_usectohz(stmf_worker_scale_down_delay *
-			    1000 * 1000);
+			    SEC_TO_TICK(stmf_worker_scale_down_delay);
 			return;
 		}
 		if (ddi_get_lbolt() < stmf_worker_scale_down_timer) {
@@ -6661,9 +6736,9 @@ stmf_dlun0_new_task(scsi_task_t *task, stmf_data_buf_t *dbuf)
 		p[4] = inq_page_length;
 		p[6] = 0x80;
 
-		(void) strncpy((char *)p+8, "SUN     ", 8);
-		(void) strncpy((char *)p+16, "COMSTAR	       ", 16);
-		(void) strncpy((char *)p+32, "1.0 ", 4);
+		(void) strncpy((char *)p+8, stmf_vendor_id, VENDOR_ID_LEN);
+		(void) strncpy((char *)p+16, stmf_product_id, PRODUCT_ID_LEN);
+		(void) strncpy((char *)p+32, stmf_revision, REVISION_LEN);
 
 		dbuf->db_data_size = sz;
 		dbuf->db_relative_offset = 0;
@@ -7266,8 +7341,10 @@ stmf_svc_init()
 	stmf_state.stmf_svc_tailp = &stmf_state.stmf_svc_active;
 	stmf_state.stmf_svc_taskq = ddi_taskq_create(0, "STMF_SVC_TASKQ", 1,
 	    TASKQ_DEFAULTPRI, 0);
-	(void) ddi_taskq_dispatch(stmf_state.stmf_svc_taskq,
-	    stmf_svc, 0, DDI_SLEEP);
+	if (ddi_taskq_dispatch(stmf_state.stmf_svc_taskq, stmf_svc, 0,
+	    DDI_SLEEP) != DDI_SUCCESS) {
+		cmn_err(CE_PANIC, "stmf_svc_init: Couldn't dispatch task");
+	}
 }
 
 stmf_status_t
@@ -7285,7 +7362,7 @@ stmf_svc_fini()
 	/* Wait for 5 seconds */
 	for (i = 0; i < 500; i++) {
 		if (stmf_state.stmf_svc_flags & STMF_SVC_STARTED)
-			delay(drv_usectohz(10000));
+			delay(MSEC_TO_TICK(10));
 		else
 			break;
 	}
@@ -7381,7 +7458,7 @@ stmf_svc_timeout(struct stmf_svc_clocks *clks)
 
 	ASSERT(mutex_owned(&stmf_state.stmf_lock));
 
-	td = drv_usectohz(20000);
+	td = MSEC_TO_TICK(20);
 
 	/* Do timeouts */
 	if (stmf_state.stmf_nlus &&
@@ -7396,12 +7473,10 @@ stmf_svc_timeout(struct stmf_svc_clocks *clks)
 		stmf_check_ilu_timing();
 		if (!stmf_state.stmf_svc_ilu_timing) {
 			/* we finished a complete round */
-			clks->timing_next =
-			    clks->timing_start + drv_usectohz(5*1000*1000);
+			clks->timing_next = clks->timing_start + SEC_TO_TICK(5);
 		} else {
 			/* we still have some ilu items to check */
-			clks->timing_next =
-			    ddi_get_lbolt() + drv_usectohz(1*1000*1000);
+			clks->timing_next = ddi_get_lbolt() + SEC_TO_TICK(1);
 		}
 
 		if (stmf_state.stmf_svc_active)
@@ -7421,12 +7496,10 @@ stmf_svc_timeout(struct stmf_svc_clocks *clks)
 		stmf_check_freetask();
 		if (!stmf_state.stmf_svc_ilu_draining) {
 			/* we finished a complete round */
-			clks->drain_next =
-			    clks->drain_start + drv_usectohz(10*1000*1000);
+			clks->drain_next = clks->drain_start + SEC_TO_TICK(10);
 		} else {
 			/* we still have some ilu items to check */
-			clks->drain_next =
-			    ddi_get_lbolt() + drv_usectohz(1*1000*1000);
+			clks->drain_next = ddi_get_lbolt() + SEC_TO_TICK(1);
 		}
 
 		if (stmf_state.stmf_svc_active)
@@ -7917,8 +7990,8 @@ stmf_scsilib_devid_to_remote_port(scsi_devid_desc_t *devid)
 		break;
 
 	case PROTOCOL_iSCSI:
-		sz = ALIGNED_TO_8BYTE_BOUNDARY(sizeof (iscsi_transport_id_t) +
-		    ident_len - 1);
+		sz = P2ROUNDUP(sizeof (iscsi_transport_id_t) + ident_len - 1,
+		    8);
 		rpt = stmf_remote_port_alloc(sz);
 		rpt->rport_tptid->format_code = 0;
 		rpt->rport_tptid->protocol_id = devid->protocol_id;
@@ -7954,8 +8027,8 @@ stmf_scsilib_devid_to_remote_port(scsi_devid_desc_t *devid)
 	case PROTOCOL_ATAPI:
 	default :
 		ident_len = devid->ident_length;
-		sz = ALIGNED_TO_8BYTE_BOUNDARY(sizeof (stmf_dflt_scsi_tptid_t) +
-		    ident_len - 1);
+		sz = P2ROUNDUP(sizeof (stmf_dflt_scsi_tptid_t) + ident_len - 1,
+		    8);
 		rpt = stmf_remote_port_alloc(sz);
 		rpt->rport_tptid->format_code = 0;
 		rpt->rport_tptid->protocol_id = devid->protocol_id;

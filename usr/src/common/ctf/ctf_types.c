@@ -25,6 +25,8 @@
  * Use is subject to license terms.
  */
 
+#pragma ident	"%Z%%M%	%I%	%E% SMI"
+
 #include <ctf_impl.h>
 
 ssize_t
@@ -241,6 +243,7 @@ ctf_type_qlname(ctf_file_t *fp, ctf_id_t type, char *buf, size_t len,
 			const ctf_type_t *tp =
 			    ctf_lookup_by_id(&rfp, cdp->cd_type);
 			const char *name = ctf_strptr(rfp, tp->ctt_name);
+			boolean_t printname = B_FALSE;
 
 			if (k != CTF_K_POINTER && k != CTF_K_ARRAY)
 				ctf_decl_sprintf(&cd, " ");
@@ -254,9 +257,7 @@ ctf_type_qlname(ctf_file_t *fp, ctf_id_t type, char *buf, size_t len,
 			case CTF_K_INTEGER:
 			case CTF_K_FLOAT:
 			case CTF_K_TYPEDEF:
-				if (qname != NULL)
-					ctf_decl_sprintf(&cd, "%s`", qname);
-				ctf_decl_sprintf(&cd, "%s", name);
+				printname = B_TRUE;
 				break;
 			case CTF_K_POINTER:
 				ctf_decl_sprintf(&cd, "*");
@@ -270,21 +271,15 @@ ctf_type_qlname(ctf_file_t *fp, ctf_id_t type, char *buf, size_t len,
 			case CTF_K_STRUCT:
 			case CTF_K_FORWARD:
 				ctf_decl_sprintf(&cd, "struct ");
-				if (qname != NULL)
-					ctf_decl_sprintf(&cd, "%s`", qname);
-				ctf_decl_sprintf(&cd, "%s", name);
+				printname = B_TRUE;
 				break;
 			case CTF_K_UNION:
 				ctf_decl_sprintf(&cd, "union ");
-				if (qname != NULL)
-					ctf_decl_sprintf(&cd, "%s`", qname);
-				ctf_decl_sprintf(&cd, "%s", name);
+				printname = B_TRUE;
 				break;
 			case CTF_K_ENUM:
 				ctf_decl_sprintf(&cd, "enum ");
-				if (qname != NULL)
-					ctf_decl_sprintf(&cd, "%s`", qname);
-				ctf_decl_sprintf(&cd, "%s", name);
+				printname = B_TRUE;
 				break;
 			case CTF_K_VOLATILE:
 				ctf_decl_sprintf(&cd, "volatile");
@@ -295,6 +290,13 @@ ctf_type_qlname(ctf_file_t *fp, ctf_id_t type, char *buf, size_t len,
 			case CTF_K_RESTRICT:
 				ctf_decl_sprintf(&cd, "restrict");
 				break;
+			}
+
+			if (printname) {
+				if (fp->ctf_modname)
+					ctf_decl_sprintf(&cd, "%s`",
+					    fp->ctf_modname);
+				ctf_decl_sprintf(&cd, "%s", name);
 			}
 
 			k = cdp->cd_kind;

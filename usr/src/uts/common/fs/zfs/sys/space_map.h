@@ -44,6 +44,7 @@ extern "C" {
  * maintain backward compatibility.
  */
 #define	SPACE_MAP_SIZE_V0	(3 * sizeof (uint64_t))
+#define	SPACE_MAP_HISTOGRAM_SIZE	32
 #define	SPACE_MAP_HISTOGRAM_SIZE(sm)			\
 	(sizeof ((sm)->sm_phys->smp_histogram) /	\
 	sizeof ((sm)->sm_phys->smp_histogram[0]))

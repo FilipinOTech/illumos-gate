@@ -1,4 +1,5 @@
 '\" te
+.\" Copyright (c) 2011 by Delphix. All rights reserved.
 .\" Copyright (C) 2006, Sun Microsystems, Inc. All Rights Reserved
 .\" Copyright 1989 AT&T
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
@@ -105,6 +106,19 @@ host is unknown and exits.
 .RS 24n
 Specify the flow label of probe packets. The value must be an integer in the
 range from 0 to 1048575. This option is valid only on IPv6.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-D\fR\fR
+.ad
+.RS 24n
+Turn off fragmentation. For IPv4, this means setting the Don't
+Fragment bit. For IPv4 and IPv6, this means do not allow fragmentation
+as the datagrams are sent.  If the \fIdata_size\fR exceeds the MTU,
+then \fBping\fR might report that sending failed due to Message too
+long.
 .RE
 
 .sp

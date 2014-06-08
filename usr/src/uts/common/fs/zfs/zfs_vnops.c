@@ -20,8 +20,8 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2012, 2013, 2014 by Delphix. All rights reserved.
+ * Copyright 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /* Portions Copyright 2007 Jeremy Teo */
@@ -283,6 +283,18 @@ zfs_holey(vnode_t *vp, int cmd, offset_t *off)
 		return (SET_ERROR(ENXIO));
 	}
 
+	/*
+	 * We could find a hole that begins after the logical end-of-file,
+	 * because dmu_offset_next() only works on whole blocks.  If the
+	 * EOF falls mid-block, then indicate that the "virtual hole"
+	 * at the end of the file begins at the logical EOF, rather than
+	 * at the end of the last block.
+	 */
+	if (noff > file_sz) {
+		ASSERT(hole);
+		noff = file_sz;
+	}
+
 	if (noff < *off)
 		return (error);
 	*off = noff;
@@ -295,24 +307,31 @@ zfs_ioctl(vnode_t *vp, int com, intptr_t data, int flag, cred_t *cred,
     int *rvalp, caller_context_t *ct)
 {
 	offset_t off;
-	int error;
-	zfsvfs_t *zfsvfs;
-	znode_t *zp;
+	int error = 0;
+	znode_t *zp = VTOZ(vp);
+	zfsvfs_t *zfsvfs = zp->z_zfsvfs;
 
 	switch (com) {
 	case _FIOFFS:
+	{
 		return (zfs_sync(vp->v_vfsp, 0, cred));
 
 		/*
 		 * The following two ioctls are used by bfu.  Faking out,
 		 * necessary to avoid bfu errors.
 		 */
+	}
 	case _FIOGDIO:
 	case _FIOSDIO:
+	{
 		return (0);
+	}
 
 	case _FIO_SEEK_DATA:
 	case _FIO_SEEK_HOLE:
+	{
+		offset_t off;
+
 		if (ddi_copyin((void *)data, &off, sizeof (off), flag))
 			return (SET_ERROR(EFAULT));
 
@@ -329,6 +348,144 @@ zfs_ioctl(vnode_t *vp, int com, intptr_t data, int flag, cred_t *cred,
 		if (ddi_copyout(&off, (void *)data, sizeof (off), flag))
 			return (SET_ERROR(EFAULT));
 		return (0);
+	}
+	case _FIO_MOOCH_BYTESWAP_MAP:
+	{
+		/*
+		 * Establish a mapping which tells us what file in the
+		 * origin should be "mooched from" when a new file is created
+		 * in this directory.
+		 *
+		 * The argument is a fio_mooch_byteswap_map_t.
+		 * The packed nvlist that it points to should map from
+		 * the name of the directory entry to the (uint64) inode
+		 * number of the file in the origin that should be mooched
+		 * from.
+		 *
+		 * The directory must be held open (i.e. its file descriptor
+		 * should not be closed) until the files have been created.
+		 * The mapping can be torn down by passing a NULL argument.
+		 *
+		 * Note that the mapping is not guaranteed to be torn down
+		 * when the file descriptor is closed; it will be at
+		 * a later point in time.
+		 *
+		 * There may only be one mapping established for each directory
+		 * at a time.  Returns EEXIST if there is already a mapping.
+		 */
+		fio_mooch_byteswap_map_t fmbm;
+		void *buf;
+		nvlist_t *nvl = NULL;
+
+		if (vp->v_type != VDIR)
+			return (SET_ERROR(ENOTDIR));
+
+		if (data != 0) {
+			mutex_enter(&zfsvfs->z_lock);
+			if (zfsvfs->z_mooch_byteswap_map == 0) {
+				dmu_tx_t *tx = dmu_tx_create(zfsvfs->z_os);
+				dmu_tx_hold_zap(tx, MASTER_NODE_OBJ, B_TRUE,
+				    ZFS_MOOCH_BYTESWAP_MAP);
+				dmu_tx_hold_zap(tx,
+				    DMU_NEW_OBJECT, B_TRUE, NULL);
+				error = dmu_tx_assign(tx, TXG_WAIT);
+				if (error != 0) {
+					mutex_exit(&zfsvfs->z_lock);
+					dmu_tx_abort(tx);
+					return (error);
+				}
+
+				zfsvfs->z_mooch_byteswap_map =
+				    zap_create(zfsvfs->z_os,
+				    DMU_OTN_ZAP_METADATA, DMU_OT_NONE, 0, tx);
+				VERIFY0(zap_add(zfsvfs->z_os,
+				    MASTER_NODE_OBJ, ZFS_MOOCH_BYTESWAP_MAP,
+				    8, 1, &zfsvfs->z_mooch_byteswap_map, tx));
+				dmu_tx_commit(tx);
+			}
+			mutex_exit(&zfsvfs->z_lock);
+
+			error = dsl_dataset_activate_mooch_byteswap(
+			    zfsvfs->z_os);
+			if (error != 0)
+				return (error);
+
+			if (ddi_copyin((void *)data, &fmbm,
+			    sizeof (fmbm), flag)) {
+				return (SET_ERROR(EFAULT));
+			}
+			buf = kmem_alloc(fmbm.fmbm_len, KM_SLEEP);
+			if (ddi_copyin((void *)(uintptr_t)fmbm.fmbm_nvlist,
+			    buf, fmbm.fmbm_len, flag)) {
+				kmem_free(buf, fmbm.fmbm_len);
+				return (SET_ERROR(EFAULT));
+			}
+			error = nvlist_unpack(buf, fmbm.fmbm_len,
+			    &nvl, KM_SLEEP);
+			kmem_free(buf, fmbm.fmbm_len);
+			if (error != 0)
+				return (SET_ERROR(EINVAL));
+		}
+
+		ZFS_ENTER(zfsvfs);
+		ZFS_VERIFY_ZP(zp);
+
+		mutex_enter(&zp->z_lock);
+		if (data == 0) {
+			nvlist_free(zp->z_mooch_map);
+			zp->z_mooch_map = NULL;
+		} else if (zp->z_mooch_map != NULL) {
+			error = SET_ERROR(EEXIST);
+			nvlist_free(nvl);
+		} else {
+			zp->z_mooch_map = nvl;
+		}
+		mutex_exit(&zp->z_lock);
+
+		ZFS_EXIT(zfsvfs);
+		return (error);
+	}
+	case _FIO_COUNT_FILLED:
+	{
+		dmu_object_info_t doi;
+		uint64_t ndata;
+		/*
+		 * _FIO_COUNT_FILLED adds a new ioctl command which
+		 * exposes the number of filled blocks in a
+		 * ZFS object.
+		 */
+		zp = VTOZ(vp);
+		zfsvfs = zp->z_zfsvfs;
+		ZFS_ENTER(zfsvfs);
+		ZFS_VERIFY_ZP(zp);
+
+		/*
+		 * Wait for all dirty blocks for this object
+		 * to get synced out to disk, and the DMU info
+		 * updated.
+		 */
+		error = dmu_object_wait_synced(zfsvfs->z_os, zp->z_id);
+		if (error) {
+			ZFS_EXIT(zfsvfs);
+			return (error);
+		}
+
+		/*
+		 * Retrieve fill count from DMU object.
+		 */
+		error = dmu_object_info(zfsvfs->z_os, zp->z_id, &doi);
+		if (error) {
+			ZFS_EXIT(zfsvfs);
+			return (error);
+		}
+
+		ndata = doi.doi_fill_count;
+
+		ZFS_EXIT(zfsvfs);
+		if (ddi_copyout(&ndata, (void *)data, sizeof (ndata), flag))
+			return (SET_ERROR(EFAULT));
+		return (0);
+	}
 	}
 	return (SET_ERROR(ENOTTY));
 }
@@ -1331,6 +1488,7 @@ zfs_create(vnode_t *dvp, char *name, vattr_t *vap, vcexcl_t excl,
 	zfs_acl_ids_t   acl_ids;
 	boolean_t	fuid_dirtied;
 	boolean_t	have_acl = B_FALSE;
+	uint64_t	moochobj = 0;
 	boolean_t	waited = B_FALSE;
 
 	/*
@@ -1353,6 +1511,11 @@ zfs_create(vnode_t *dvp, char *name, vattr_t *vap, vcexcl_t excl,
 	ZFS_VERIFY_ZP(dzp);
 	os = zfsvfs->z_os;
 	zilog = zfsvfs->z_log;
+
+	mutex_enter(&dzp->z_lock);
+	(void) nvlist_lookup_uint64(dzp->z_mooch_map, name, &moochobj);
+	mutex_exit(&dzp->z_lock);
+
 
 	if (zfsvfs->z_utf8 && u8_validate(name, strlen(name),
 	    NULL, U8_VALIDATE_ENTIRE, &error) < 0) {
@@ -1452,6 +1615,11 @@ top:
 			dmu_tx_hold_write(tx, DMU_NEW_OBJECT,
 			    0, acl_ids.z_aclp->z_acl_bytes);
 		}
+		if (moochobj != 0) {
+			ASSERT(zfsvfs->z_mooch_byteswap_map != 0);
+			dmu_tx_hold_zap(tx, zfsvfs->z_mooch_byteswap_map,
+			    B_TRUE, NULL);
+		}
 		error = dmu_tx_assign(tx, waited ? TXG_WAITED : TXG_NOWAIT);
 		if (error) {
 			zfs_dirent_unlock(dl);
@@ -1467,6 +1635,13 @@ top:
 			return (error);
 		}
 		zfs_mknode(dzp, vap, tx, cr, 0, &zp, &acl_ids);
+
+		if (moochobj != 0) {
+			VERIFY0(zap_add_int_key(zfsvfs->z_os,
+			    zfsvfs->z_mooch_byteswap_map,
+			    zp->z_id, moochobj, tx));
+			dmu_object_refresh_mooch_obj(zfsvfs->z_os, zp->z_id);
+		}
 
 		if (fuid_dirtied)
 			zfs_fuid_sync(zfsvfs, tx);

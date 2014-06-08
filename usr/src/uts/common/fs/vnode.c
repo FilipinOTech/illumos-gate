@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, Delphix. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
@@ -926,9 +927,8 @@ vn_open(
 	mode_t umask)
 {
 	return (vn_openat(pnamep, seg, filemode, createmode, vpp, crwhy,
-	    umask, NULL, -1));
+	    umask, NULL, -1, CRED()));
 }
-
 
 /*
  * Open/create a vnode.
@@ -946,7 +946,8 @@ vn_openat(
 	enum create crwhy,
 	mode_t umask,
 	struct vnode *startvp,
-	int fd)
+	int fd,
+	cred_t *cred)
 {
 	struct vnode *vp;
 	int mode;
@@ -999,8 +1000,8 @@ top:
 			excl = NONEXCL;
 
 		if (error =
-		    vn_createat(pnamep, seg, &vattr, excl, mode, &vp, crwhy,
-		    (filemode & ~(FTRUNC|FEXCL)), umask, startvp))
+		    vn_createat(pnamep, seg, &vattr, excl, mode, &vp,
+		    crwhy, (filemode & ~(FTRUNC|FEXCL)), umask, startvp, cred))
 			return (error);
 	} else {
 		/*
@@ -1023,7 +1024,7 @@ top:
 		if (!(filemode & FOFFMAX) && (vp->v_type == VREG)) {
 			vattr.va_mask = AT_SIZE;
 			if ((error = VOP_GETATTR(vp, &vattr, 0,
-			    CRED(), NULL))) {
+			    cred, NULL))) {
 				goto out;
 			}
 			if (vattr.va_size > (u_offset_t)MAXOFF32_T) {
@@ -1064,7 +1065,7 @@ top:
 				if (rvp->v_filocks != NULL) {
 					vattr.va_mask = AT_MODE;
 					if ((error = VOP_GETATTR(vp,
-					    &vattr, 0, CRED(), NULL)) == 0 &&
+					    &vattr, 0, cred, NULL)) == 0 &&
 					    MANDLOCK(vp, vattr.va_mode))
 						error = EAGAIN;
 				}
@@ -1075,7 +1076,7 @@ top:
 		/*
 		 * Check permissions.
 		 */
-		if (error = VOP_ACCESS(vp, mode, accessflags, CRED(), NULL))
+		if (error = VOP_ACCESS(vp, mode, accessflags, cred, NULL))
 			goto out;
 		/*
 		 * Require FSEARCH to return a directory.
@@ -1100,7 +1101,7 @@ top:
 	}
 	if (filemode & FNOLINKS) {
 		vattr.va_mask = AT_NLINK;
-		if ((error = VOP_GETATTR(vp, &vattr, 0, CRED(), NULL))) {
+		if ((error = VOP_GETATTR(vp, &vattr, 0, cred, NULL))) {
 			goto out;
 		}
 		if (vattr.va_nlink != 1) {
@@ -1146,7 +1147,7 @@ top:
 		shr_own.sl_id = fd;
 		shr.s_own_len = sizeof (shr_own);
 		shr.s_owner = (caddr_t)&shr_own;
-		error = VOP_SHRLOCK(vp, F_SHARE_NBMAND, &shr, filemode, CRED(),
+		error = VOP_SHRLOCK(vp, F_SHARE_NBMAND, &shr, filemode, cred,
 		    NULL);
 		if (error)
 			goto out;
@@ -1158,7 +1159,7 @@ top:
 			in_crit = 1;
 
 			vattr.va_mask = AT_SIZE;
-			if (error = VOP_GETATTR(vp, &vattr, 0, CRED(), NULL))
+			if (error = VOP_GETATTR(vp, &vattr, 0, cred, NULL))
 				goto out;
 			if (nbl_conflict(vp, NBL_WRITE, 0, vattr.va_size, 0,
 			    NULL)) {
@@ -1171,7 +1172,7 @@ top:
 	/*
 	 * Do opening protocol.
 	 */
-	error = VOP_OPEN(&vp, filemode, CRED(), NULL);
+	error = VOP_OPEN(&vp, filemode, cred, NULL);
 	if (error)
 		goto out;
 	open_done = 1;
@@ -1182,7 +1183,7 @@ top:
 	if ((filemode & FTRUNC) && !(filemode & FCREAT)) {
 		vattr.va_size = 0;
 		vattr.va_mask = AT_SIZE;
-		if ((error = VOP_SETATTR(vp, &vattr, 0, CRED(), NULL)) != 0)
+		if ((error = VOP_SETATTR(vp, &vattr, 0, cred, NULL)) != 0)
 			goto out;
 	}
 out:
@@ -1194,13 +1195,13 @@ out:
 	}
 	if (error) {
 		if (open_done) {
-			(void) VOP_CLOSE(vp, filemode, 1, (offset_t)0, CRED(),
+			(void) VOP_CLOSE(vp, filemode, 1, (offset_t)0, cred,
 			    NULL);
 			open_done = 0;
 			shrlock_done = 0;
 		}
 		if (shrlock_done) {
-			(void) VOP_SHRLOCK(vp, F_UNSHARE, &shr, 0, CRED(),
+			(void) VOP_SHRLOCK(vp, F_UNSHARE, &shr, 0, cred,
 			    NULL);
 			shrlock_done = 0;
 		}
@@ -1281,7 +1282,7 @@ vn_create(
 	mode_t umask)
 {
 	return (vn_createat(pnamep, seg, vap, excl, mode, vpp, why, flag,
-	    umask, NULL));
+	    umask, NULL, CRED()));
 }
 
 /*
@@ -1298,7 +1299,8 @@ vn_createat(
 	enum create why,
 	int flag,
 	mode_t umask,
-	struct vnode *startvp)
+	struct vnode *startvp,
+	cred_t *cred)
 {
 	struct vnode *dvp;	/* ptr to parent dir vnode */
 	struct vnode *vp = NULL;
@@ -1370,7 +1372,7 @@ top:
 		vsec.vsa_dfaclcnt = 0;
 		vsec.vsa_dfaclentp = NULL;
 		vsec.vsa_mask = VSA_DFACLCNT;
-		error = VOP_GETSECATTR(dvp, &vsec, 0, CRED(), NULL);
+		error = VOP_GETSECATTR(dvp, &vsec, 0, cred, NULL);
 		/*
 		 * If error is ENOSYS then treat it as no error
 		 * Don't want to force all file systems to support
@@ -1437,7 +1439,7 @@ top:
 		}
 		if (rvp->v_filocks != NULL || rvp->v_shrlocks != NULL) {
 			vattr.va_mask = AT_MODE|AT_SIZE;
-			if (error = VOP_GETATTR(vp, &vattr, 0, CRED(), NULL)) {
+			if (error = VOP_GETATTR(vp, &vattr, 0, cred, NULL)) {
 				goto out;
 			}
 			if (MANDLOCK(vp, vattr.va_mode)) {
@@ -1481,7 +1483,7 @@ top:
 		if (vp->v_flag & VROOT) {
 			ASSERT(why != CRMKDIR);
 			error = VOP_CREATE(vp, "", vap, excl, mode, vpp,
-			    CRED(), flag, NULL, NULL);
+			    cred, flag, NULL, NULL);
 			/*
 			 * If the create succeeded, it will have created
 			 * a new reference to the vnode.  Give up the
@@ -1506,7 +1508,7 @@ top:
 		    (vp->v_type == VREG)) {
 			vattr.va_mask = AT_SIZE;
 			if ((error = VOP_GETATTR(vp, &vattr, 0,
-			    CRED(), NULL))) {
+			    cred, NULL))) {
 				goto out;
 			}
 			if ((vattr.va_size > (u_offset_t)MAXOFF32_T)) {
@@ -1529,11 +1531,11 @@ top:
 			 * to be passed to VOP_MKDIR().  VOP_CREATE()
 			 * will already get it via "flag"
 			 */
-			error = VOP_MKDIR(dvp, pn.pn_path, vap, vpp, CRED(),
+			error = VOP_MKDIR(dvp, pn.pn_path, vap, vpp, cred,
 			    NULL, 0, NULL);
 		else if (!must_be_dir)
 			error = VOP_CREATE(dvp, pn.pn_path, vap,
-			    excl, mode, vpp, CRED(), flag, NULL, NULL);
+			    excl, mode, vpp, cred, flag, NULL, NULL);
 		else
 			error = ENOTDIR;
 	}

@@ -20,10 +20,11 @@
  */
 
 /*
- * Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 1990 Mentat Inc.
+ * Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012 Joyent, Inc. All rights reserved.
  * Copyright (c) 2014, OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright (c) 2013, 2014 by Delphix. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -1028,12 +1029,11 @@ ip_ioctl_cmd_t ip_ndx_ioctl_table[] = {
 			MISC_CMD, ip_sioctl_tmysite, NULL },
 	/* 147 */ { IPI_DONTCARE, 0, 0, 0, NULL, NULL },
 	/* 148 */ { IPI_DONTCARE, 0, 0, 0, NULL, NULL },
-
-	/* Old *IPSECONFIG ioctls are now deprecated, now see spdsock.c */
-	/* 149 */ { IPI_DONTCARE, 0, 0, 0, NULL, NULL },
-	/* 150 */ { IPI_DONTCARE, 0, 0, 0, NULL, NULL },
-	/* 151 */ { IPI_DONTCARE, 0, 0, 0, NULL, NULL },
-	/* 152 */ { IPI_DONTCARE, 0, 0, 0, NULL, NULL },
+	/* IPSECioctls handled in ip_sioctl_copyin_setup itself */
+	/* 149 */ { SIOCFIPSECONFIG, 0, IPI_PRIV, MISC_CMD, NULL, NULL },
+	/* 150 */ { SIOCSIPSECONFIG, 0, IPI_PRIV, MISC_CMD, NULL, NULL },
+	/* 151 */ { SIOCDIPSECONFIG, 0, IPI_PRIV, MISC_CMD, NULL, NULL },
+	/* 152 */ { SIOCLIPSECONFIG, 0, IPI_PRIV, MISC_CMD, NULL, NULL },
 
 	/* 153 */ { IPI_DONTCARE, 0, 0, 0, NULL, NULL },
 
@@ -1498,7 +1498,7 @@ icmp_inbound_v4(mblk_t *mp, ip_recv_attr_t *ira)
 		/* Compute # of milliseconds since midnight */
 		gethrestime(&now);
 		ts = (now.tv_sec % (24 * 60 * 60)) * 1000 +
-		    NSEC2MSEC(now.tv_nsec);
+		    now.tv_nsec / (NANOSEC / MILLISEC);
 		*tsp++ = htonl(ts);	/* Lay in 'receive time' */
 		*tsp++ = htonl(ts);	/* Lay in 'send time' */
 		BUMP_MIB(&ipst->ips_icmp_mib, icmpOutTimestampReps);
@@ -5396,6 +5396,7 @@ notfound:
 		return;
 	}
 	ASSERT(IPCL_IS_NONSTR(connp) || connp->conn_rq != NULL);
+	CONN_INC_REF(connp);
 
 	/*
 	 * If SO_REUSEADDR has been set on the first we send the
@@ -5411,8 +5412,8 @@ notfound:
 		connp = connp->conn_next;
 		for (;;) {
 			while (connp != NULL) {
-				if (IPCL_UDP_MATCH_V6(connp, lport,
-				    ipv6_all_zeros, fport, v6faddr) &&
+				if (IPCL_UDP_MATCH(connp, lport, laddr,
+				    fport, faddr) &&
 				    conn_wantpacket(connp, ira, ipha) &&
 				    (!(ira->ira_flags & IRAF_SYSTEM_LABELED) ||
 				    tsol_receive_local(mp, &laddr, IPV4_VERSION,
@@ -9117,7 +9118,7 @@ ip_forward_options(mblk_t *mp, ipha_t *ipha, ill_t *dst_ill,
 				/* Compute # of milliseconds since midnight */
 				gethrestime(&now);
 				ts = (now.tv_sec % (24 * 60 * 60)) * 1000 +
-				    NSEC2MSEC(now.tv_nsec);
+				    now.tv_nsec / (NANOSEC / MILLISEC);
 				bcopy(&ts, (char *)opt + off, IPOPT_TS_TIMELEN);
 				opt[IPOPT_OFFSET] += IPOPT_TS_TIMELEN;
 				break;
@@ -9239,6 +9240,15 @@ ip_input_local_options(mblk_t *mp, ipha_t *ipha, ip_recv_attr_t *ira)
 			uint32_t off;
 		case IPOPT_SSRR:
 		case IPOPT_LSRR:
+			if (!ipst->ips_ip_accept_src_routed) {
+				DB_CKSUMFLAGS(mp) = 0;
+				ip_drop_input("ICMP_DEST_HOST_UNREACH_ADMIN",
+				    mp, ill);
+				icmp_unreachable(mp,
+				    ICMP_DEST_HOST_UNREACH_ADMIN, ira);
+				return (B_FALSE);
+			}
+
 			off = opt[IPOPT_OFFSET];
 			off--;
 			if (optlen < IP_ADDR_LEN ||
@@ -9343,7 +9353,7 @@ ip_input_local_options(mblk_t *mp, ipha_t *ipha, ip_recv_attr_t *ira)
 				/* Compute # of milliseconds since midnight */
 				gethrestime(&now);
 				ts = (now.tv_sec % (24 * 60 * 60)) * 1000 +
-				    NSEC2MSEC(now.tv_nsec);
+				    now.tv_nsec / (NANOSEC / MILLISEC);
 				bcopy(&ts, (char *)opt + off, IPOPT_TS_TIMELEN);
 				opt[IPOPT_OFFSET] += IPOPT_TS_TIMELEN;
 				break;
@@ -12025,7 +12035,7 @@ ip_output_local_options(ipha_t *ipha, ip_stack_t *ipst)
 				/* Compute # of milliseconds since midnight */
 				gethrestime(&now);
 				ts = (now.tv_sec % (24 * 60 * 60)) * 1000 +
-				    NSEC2MSEC(now.tv_nsec);
+				    now.tv_nsec / (NANOSEC / MILLISEC);
 				bcopy(&ts, (char *)opt + off, IPOPT_TS_TIMELEN);
 				opt[IPOPT_OFFSET] += IPOPT_TS_TIMELEN;
 				break;
@@ -12958,7 +12968,8 @@ ip_output_options(mblk_t *mp, ipha_t *ipha, ip_xmit_attr_t *ixa, ill_t *ill)
 	uint8_t		optval;
 	uint8_t		optlen;
 	ipaddr_t	dst;
-	intptr_t	code = 0;
+	intptr_t	pptr = 0;
+	uint8_t		code = ICMP_SOURCE_ROUTE_FAILED;
 	ire_t		*ire;
 	ip_stack_t	*ipst = ixa->ixa_ipst;
 	ip_recv_attr_t	iras;
@@ -12977,12 +12988,15 @@ ip_output_options(mblk_t *mp, ipha_t *ipha, ip_xmit_attr_t *ixa, ill_t *ill)
 			uint32_t off;
 		case IPOPT_SSRR:
 		case IPOPT_LSRR:
+			if (!ipst->ips_ip_send_src_routed) {
+				code = ICMP_DEST_HOST_UNREACH_ADMIN;
+				goto bad_src_route;
+			}
 			if ((opts.ipoptp_flags & IPOPTP_ERROR) != 0) {
 				ip1dbg((
 				    "ip_output_options: bad option offset\n"));
-				code = (char *)&opt[IPOPT_OLEN] -
-				    (char *)ipha;
-				goto param_prob;
+				pptr = (char *)&opt[IPOPT_OLEN] - (char *)ipha;
+				goto bad_src_route;
 			}
 			off = opt[IPOPT_OFFSET];
 			ip1dbg(("ip_output_options: next hop 0x%x\n",
@@ -13010,9 +13024,8 @@ ip_output_options(mblk_t *mp, ipha_t *ipha, ip_xmit_attr_t *ixa, ill_t *ill)
 			if ((opts.ipoptp_flags & IPOPTP_ERROR) != 0) {
 				ip1dbg((
 				    "ip_output_options: bad option offset\n"));
-				code = (char *)&opt[IPOPT_OLEN] -
-				    (char *)ipha;
-				goto param_prob;
+				pptr = (char *)&opt[IPOPT_OLEN] - (char *)ipha;
+				goto bad_src_route;
 			}
 			break;
 		case IPOPT_TS:
@@ -13021,16 +13034,16 @@ ip_output_options(mblk_t *mp, ipha_t *ipha, ip_xmit_attr_t *ixa, ill_t *ill)
 			 * room for another timestamp or that the overflow
 			 * counter is not maxed out.
 			 */
-			code = (char *)&opt[IPOPT_OLEN] - (char *)ipha;
+			pptr = (char *)&opt[IPOPT_OLEN] - (char *)ipha;
 			if (optlen < IPOPT_MINLEN_IT) {
-				goto param_prob;
+				goto bad_src_route;
 			}
 			if ((opts.ipoptp_flags & IPOPTP_ERROR) != 0) {
 				ip1dbg((
 				    "ip_output_options: bad option offset\n"));
-				code = (char *)&opt[IPOPT_OFFSET] -
+				pptr = (char *)&opt[IPOPT_OFFSET] -
 				    (char *)ipha;
-				goto param_prob;
+				goto bad_src_route;
 			}
 			switch (opt[IPOPT_POS_OV_FLG] & 0x0F) {
 			case IPOPT_TS_TSONLY:
@@ -13042,9 +13055,9 @@ ip_output_options(mblk_t *mp, ipha_t *ipha, ip_xmit_attr_t *ixa, ill_t *ill)
 				off = IP_ADDR_LEN + IPOPT_TS_TIMELEN;
 				break;
 			default:
-				code = (char *)&opt[IPOPT_POS_OV_FLG] -
+				pptr = (char *)&opt[IPOPT_POS_OV_FLG] -
 				    (char *)ipha;
-				goto param_prob;
+				goto bad_src_route;
 			}
 			if (opt[IPOPT_OFFSET] - 1 + off > optlen &&
 			    (opt[IPOPT_POS_OV_FLG] & 0xF0) == 0xF0) {
@@ -13052,7 +13065,7 @@ ip_output_options(mblk_t *mp, ipha_t *ipha, ip_xmit_attr_t *ixa, ill_t *ill)
 				 * No room and the overflow counter is 15
 				 * already.
 				 */
-				goto param_prob;
+				goto bad_src_route;
 			}
 			break;
 		}
@@ -13062,19 +13075,7 @@ ip_output_options(mblk_t *mp, ipha_t *ipha, ip_xmit_attr_t *ixa, ill_t *ill)
 		return (0);
 
 	ip1dbg(("ip_output_options: error processing IP options."));
-	code = (char *)&opt[IPOPT_OFFSET] - (char *)ipha;
-
-param_prob:
-	bzero(&iras, sizeof (iras));
-	iras.ira_ill = iras.ira_rill = ill;
-	iras.ira_ruifindex = ill->ill_phyint->phyint_ifindex;
-	iras.ira_rifindex = iras.ira_ruifindex;
-	iras.ira_flags = IRAF_IS_IPV4;
-
-	ip_drop_output("ip_output_options", mp, ill);
-	icmp_param_problem(mp, (uint8_t)code, &iras);
-	ASSERT(!(iras.ira_flags & IRAF_IPSEC_SECURE));
-	return (-1);
+	pptr = (char *)&opt[IPOPT_OFFSET] - (char *)ipha;
 
 bad_src_route:
 	bzero(&iras, sizeof (iras));
@@ -13083,8 +13084,11 @@ bad_src_route:
 	iras.ira_rifindex = iras.ira_ruifindex;
 	iras.ira_flags = IRAF_IS_IPV4;
 
-	ip_drop_input("ICMP_SOURCE_ROUTE_FAILED", mp, ill);
-	icmp_unreachable(mp, ICMP_SOURCE_ROUTE_FAILED, &iras);
+	ip_drop_output("ICMP_SOURCE_ROUTE_FAILED", mp, ill);
+	if (pptr != 0)
+		icmp_param_problem(mp, pptr, &iras);
+	else
+		icmp_unreachable(mp, code, &iras);
 	ASSERT(!(iras.ira_flags & IRAF_IPSEC_SECURE));
 	return (-1);
 }

@@ -13,6 +13,8 @@
 # Copyright 2011, Richard Lowe
 # Copyright (c) 2012, Joyent, Inc.  All rights reserved.
 # Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+# Copyright (c) 2012 Joyent, Inc. All rights reserved.
+# Copyright (c) 2013 by Delphix. All rights reserved.
 #
 
 include		$(SRC)//Makefile.master
@@ -355,9 +357,6 @@ _MANFILES=	6to4relay.1m		\
 		ncheck.1m		\
 		ncheck_ufs.1m		\
 		ndd.1m			\
-		ndmpadm.1m		\
-		ndmpd.1m		\
-		ndmpstat.1m		\
 		netstat.1m		\
 		netstrategy.1m		\
 		newaliases.1m		\

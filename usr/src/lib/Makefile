@@ -21,7 +21,7 @@
 
 # Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2013 by Delphix. All rights reserved.
 # Copyright (c) 2012, Joyent, Inc. All rights reserved.
 # Copyright (c) 2013 Gary Mills
 
@@ -117,6 +117,7 @@ SUBDIRS += \
 	libmtmalloc	\
 	libnls		\
 	libnwam		\
+	libroute	\
 	libsmbios	\
 	libtecla	\
 	libumem		\
@@ -329,6 +330,7 @@ MSGSUBDIRS=		\
 	libinetutil	\
 	libinstzones	\
 	libipadm	\
+	libipd		\
 	libnsl		\
 	libnwam		\
 	libpam		\
@@ -413,6 +415,7 @@ HDRSUBDIRS=		\
 	libinetsvc	\
 	libinetutil	\
 	libinstzones	\
+	libipd		\
 	libipmi		\
 	libipmp		\
 	libipp		\
@@ -436,6 +439,7 @@ HDRSUBDIRS=		\
 	libpp		\
 	libproc		\
 	libraidcfg	\
+	libroute	\
 	librcm		\
 	librdc		\
 	libscf		\
@@ -601,6 +605,7 @@ libipsecutil:	libtecla libsocket
 libinstzones:	libzonecfg libcontract
 libpkg:		libwanboot libscf libadm
 libnwam:	libscf
+libroute:	libsocket
 libsecdb:	libnsl
 libsasl:	libgss libsocket pkcs11 libmd
 sasl_plugins:	pkcs11 libgss libsocket libsasl

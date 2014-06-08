@@ -26,8 +26,8 @@
  */
 
 /*
- * Copyright (c) 2012 by Delphix. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2012, 2013 by Delphix. All rights reserved.
+ * Copyright 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -374,6 +374,27 @@ nlm_gc(struct nlm_globals *g)
 		while ((hostp = TAILQ_FIRST(&g->nlm_idle_hosts)) != NULL) {
 			bool_t has_locks = FALSE;
 
+			/*
+			 * A busy client will prevent the idle timeout from
+			 * ever being reached but may have stale holds
+			 * associated with it. If these stale holds are for
+			 * vnodes which have been removed they will prevent
+			 * the file system from being able to reclaim the
+			 * file's space.
+			 *
+			 * To address this problem we unconditionally GC
+			 * the host's vholds every time the GC runs. Since
+			 * this is an expensive check, drop the global lock
+			 * and only hold the host lock.
+			 */
+			mutex_exit(&g->lock);
+			mutex_enter(&hostp->nh_lock);
+
+			nlm_host_gc_vholds(hostp);
+
+			mutex_exit(&hostp->nh_lock);
+			mutex_enter(&g->lock);
+
 			if (hostp->nh_idle_timeout > now)
 				break;
 
@@ -390,6 +411,8 @@ nlm_gc(struct nlm_globals *g)
 			 * nlm_globals lock was dropped earlier because
 			 * garbage collecting of vholds and checking whether
 			 * host has any locks/shares are expensive operations.
+			 * In the worst case it may need to visit
+			 * every file lock on the system.
 			 */
 			nlm_host_gc_vholds(hostp);
 			has_locks = nlm_host_has_locks(hostp);
@@ -398,21 +421,22 @@ nlm_gc(struct nlm_globals *g)
 			mutex_enter(&g->lock);
 
 			/*
-			 * While we were doing expensive operations outside of
-			 * nlm_globals critical section, somebody could
-			 * take the host, add lock/share to one of its vnodes
-			 * and release the host back. If so, host's idle timeout
-			 * is renewed and our information about locks on the
-			 * given host is outdated.
+			 * While we were doing expensive operations
+			 * outside of nlm_globals critical section,
+			 * somebody could take the host and remove it
+			 * from the idle list.  Whether its been
+			 * reinserted or not, our information about
+			 * the host is outdated, and we should take no
+			 * further action.
 			 */
-			if (hostp->nh_idle_timeout > now)
+			if (hostp->nh_idle_timeout > now || hostp->nh_refs > 0)
 				continue;
 
 			/*
 			 * If either host has locks or somebody has began to
 			 * use it while we were outside the nlm_globals critical
 			 * section. In both cases we have to renew host's
-			 * timeout and put it to the end of LRU list.
+			 * timeout and put it at the end of LRU list.
 			 */
 			if (has_locks || hostp->nh_refs > 0) {
 				TAILQ_REMOVE(&g->nlm_idle_hosts,
@@ -1033,6 +1057,7 @@ nlm_vhold_destroy(struct nlm_host *hostp, struct nlm_vhold *nvp)
 
 	TAILQ_REMOVE(&hostp->nh_vholds_list, nvp, nv_link);
 	VN_RELE(nvp->nv_vp);
+	VN_RELE_ASYNC(nvp->nv_vp, system_taskq);
 	nvp->nv_vp = NULL;
 
 	kmem_cache_free(nlm_vhold_cache, nvp);
@@ -1139,6 +1164,7 @@ static void
 nlm_host_unregister(struct nlm_globals *g, struct nlm_host *hostp)
 {
 	ASSERT(hostp->nh_refs == 0);
+	ASSERT(hostp->nh_flags & NLM_NH_INIDLE);
 
 	avl_remove(&g->nlm_hosts_tree, hostp);
 	VERIFY(mod_hash_remove(g->nlm_hosts_hash,

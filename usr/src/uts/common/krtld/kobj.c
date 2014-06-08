@@ -23,6 +23,7 @@
  * Use is subject to license terms.
  */
 /*
+ * Copyright (c) 2011 by Delphix. All rights reserved.
  * Copyright 2011 Bayard G. Bell <buffer.g.overflow@gmail.com>.
  * All rights reserved. Use is subject to license terms.
  */
@@ -3542,11 +3543,8 @@ kobj_open(char *filename)
 			 * 1098067: module creds should not be those of the
 			 * caller
 			 */
-			cred_t *saved_cred = curthread->t_cred;
-			curthread->t_cred = kcred;
 			Errno = vn_openat(filename, UIO_SYSSPACE, FREAD, 0, &vp,
-			    0, 0, rootdir, -1);
-			curthread->t_cred = saved_cred;
+			    0, 0, rootdir, -1, kcred);
 		}
 		kobjopen_free(ltp);
 

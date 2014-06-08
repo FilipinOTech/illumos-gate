@@ -941,7 +941,7 @@ lscf_set_repository(const char *repfile, int force)
 }
 
 void
-lscf_init()
+lscf_init(void)
 {
 	if ((max_scf_fmri_len = scf_limit(SCF_LIMIT_MAX_FMRI_LENGTH)) < 0 ||
 	    (max_scf_name_len = scf_limit(SCF_LIMIT_MAX_NAME_LENGTH)) < 0 ||
@@ -7821,7 +7821,7 @@ imp_refresh_fmri(const char *fmri, const char *name, const char *d_fmri)
 }
 
 static int
-alloc_imp_globals()
+alloc_imp_globals(void)
 {
 	int r;
 
@@ -7894,7 +7894,7 @@ alloc_imp_globals()
 }
 
 static void
-free_imp_globals()
+free_imp_globals(void)
 {
 	pgroup_t *old_dpt;
 	void *cookie;
@@ -14079,7 +14079,7 @@ out:
 }
 
 int
-lscf_editprop()
+lscf_editprop(void)
 {
 	char *buf, *editor;
 	size_t bufsz;
@@ -14762,7 +14762,7 @@ usage:
  */
 
 void
-lscf_listsnap()
+lscf_listsnap(void)
 {
 	scf_snapshot_t *snap;
 	scf_iter_t *iter;
@@ -16571,16 +16571,17 @@ upgrade_svc_mfst_connection(scf_service_t *svc, const char *svcname)
 		 * Solaris and/or delivered outside supported directories, set
 		 * unsupported flag for these services.
 		 */
-		r = check_mfst_history(svcname);
-		if (r == -1)
+		switch (check_mfst_history(svcname)) {
+		case -1:
 			return;
-
-		if (r) {
-			/* Set unsupported flag for service  */
-			svc_add_no_support(svc);
-		} else {
+		case 0:
 			/* Delete the service */
 			teardown_service(svc, svcname);
+			break;
+		default:
+			/* Set unsupported flag for service  */
+			svc_add_no_support(svc);
+			break;
 		}
 
 		return;
@@ -17058,7 +17059,7 @@ out:
  * the property group.
  */
 int
-lscf_hash_cleanup()
+lscf_hash_cleanup(void)
 {
 	scf_service_t		*svc;
 	scf_scope_t		*scope;

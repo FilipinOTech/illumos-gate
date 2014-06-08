@@ -330,7 +330,7 @@ vdev_disk_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 	 * Create vd->vdev_tsd.
 	 */
 	vdev_disk_alloc(vd);
-	dvd = vd->vdev_tsd;
+	dvd = vd->vdev_tsd = kmem_zalloc(sizeof (vdev_disk_t), KM_SLEEP);
 
 	/*
 	 * When opening a disk device, we want to preserve the user's original
@@ -363,6 +363,7 @@ vdev_disk_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 		if (vd->vdev_wholedisk == -1ULL) {
 			size_t len = strlen(vd->vdev_path) + 3;
 			char *buf = kmem_alloc(len, KM_SLEEP);
+			ldi_handle_t lh;
 
 			(void) snprintf(buf, len, "%ss0", vd->vdev_path);
 
@@ -372,6 +373,7 @@ vdev_disk_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 				spa_strfree(vd->vdev_path);
 				vd->vdev_path = buf;
 				vd->vdev_wholedisk = 1ULL;
+				(void) ldi_close(lh, spa_mode(spa), kcred);
 			} else {
 				kmem_free(buf, len);
 			}
@@ -614,6 +616,8 @@ vdev_disk_close(vdev_t *vd)
 	if (dvd->vd_ldi_offline)
 		return;
 
+	kmem_free(dvd, sizeof (vdev_disk_t));
+	vd->vdev_tsd = NULL;
 	vdev_disk_free(vd);
 }
 

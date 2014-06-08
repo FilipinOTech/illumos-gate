@@ -22,6 +22,7 @@
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+# Copyright (c) 2012 OmniTI Computer Consulting, Inc. All rights reserved.
 #
 
 set name=pkg.fmri \
@@ -232,4 +233,4 @@ link path=usr/share/man/man4/addresses.4 target=aliases.4
 link path=usr/share/man/man4/forward.4 target=aliases.4
 link path=usr/share/man/man4/sendmail.cf.4 target=sendmail.4
 link path=usr/share/man/man4/submit.cf.4 target=sendmail.4
-depend fmri=runtime/perl-510 type=require
+depend fmri=runtime/perl type=require

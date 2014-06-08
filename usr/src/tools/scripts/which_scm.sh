@@ -33,7 +33,7 @@
 # type have a control directory per directory (RCS and SCCS), with no other
 # structure.  The second type have a control directory in each subdirectory
 # within a tree (CVS and SVN).  The last type have a single control
-# directory at the top of the tree (Teamware and Mercurial).
+# directory at the top of the tree (Teamware, Git, and Mercurial).
 
 # If the common CODEMGR_WS variable is set, then we look there for the
 # SCM type and bail out if we can't determine it.

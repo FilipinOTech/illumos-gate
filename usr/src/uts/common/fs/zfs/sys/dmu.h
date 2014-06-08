@@ -119,6 +119,14 @@ typedef enum dmu_object_byteswap {
 	((ot) & DMU_OT_METADATA) : \
 	dmu_ot[(ot)].ot_metadata)
 
+/*
+ * These object types use bp_fill != 1 for their L0 bp's. Therefore they can't
+ * have their data embedded (i.e. use a BP_IS_EMBEDDED() bp), because bp_fill
+ * is repurposed for embedded BPs.
+ */
+#define	DMU_OT_HAS_FILL(ot) \
+	((ot) == DMU_OT_DNODE || (ot) == DMU_OT_OBJSET)
+
 #define	DMU_OT_BYTESWAP(ot) (((ot) & DMU_OT_NEWTYPE) ? \
 	((ot) & DMU_OT_BYTESWAP_MASK) : \
 	dmu_ot[(ot)].ot_byteswap)
@@ -245,7 +253,6 @@ void zfs_znode_byteswap(void *buf, size_t size);
 
 #define	DMU_USERUSED_OBJECT	(-1ULL)
 #define	DMU_GROUPUSED_OBJECT	(-2ULL)
-#define	DMU_DEADLIST_OBJECT	(-3ULL)
 
 /*
  * artificial blkids for bonus buffer and spill blocks
@@ -275,6 +282,7 @@ int dmu_objset_find(char *name, int func(const char *, void *), void *arg,
 void dmu_objset_byteswap(void *buf, size_t size);
 int dsl_dataset_rename_snapshot(const char *fsname,
     const char *oldsnapname, const char *newsnapname, boolean_t recursive);
+int dsl_dataset_activate_mooch_byteswap(objset_t *os);
 
 typedef struct dmu_buf {
 	uint64_t db_object;		/* object that this buffer is part of */
@@ -393,6 +401,13 @@ void dmu_object_set_checksum(objset_t *os, uint64_t object, uint8_t checksum,
  */
 void dmu_object_set_compress(objset_t *os, uint64_t object, uint8_t compress,
     dmu_tx_t *tx);
+
+void dmu_object_refresh_mooch_obj(objset_t *os, uint64_t object);
+
+void
+dmu_write_embedded(objset_t *os, uint64_t object, uint64_t offset,
+    void *data, uint8_t etype, uint8_t comp, int uncompressed_size,
+    int compressed_size, int byteorder, dmu_tx_t *tx);
 
 /*
  * Decide how to write a block: checksum, compression, number of copies, etc.
@@ -748,8 +763,9 @@ extern int dmu_dir_list_next(objset_t *os, int namelen, char *name,
 
 typedef int objset_used_cb_t(dmu_object_type_t bonustype,
     void *bonus, uint64_t *userp, uint64_t *groupp);
+typedef int objset_mooch_cb_t(objset_t *os, uint64_t obj, uint64_t *objp);
 extern void dmu_objset_register_type(dmu_objset_type_t ost,
-    objset_used_cb_t *cb);
+    objset_used_cb_t *used_cb, objset_mooch_cb_t *mooch_cb);
 extern void dmu_objset_set_user(objset_t *os, void *user_ptr);
 extern void *dmu_objset_get_user(objset_t *os);
 
@@ -789,6 +805,15 @@ int dmu_sync(struct zio *zio, uint64_t txg, dmu_sync_cb_t *done, zgd_t *zgd);
  */
 int dmu_offset_next(objset_t *os, uint64_t object, boolean_t hole,
     uint64_t *off);
+
+/*
+ * Check if a DMU object has any dirty blocks. If so, sync out
+ * all pending transaction groups. Otherwise, this function
+ * does not alter DMU state. This could be improved to only sync
+ * out the necessary transaction groups for this particular
+ * object.
+ */
+int dmu_object_wait_synced(objset_t *os, uint64_t object);
 
 /*
  * Initial setup and final teardown.

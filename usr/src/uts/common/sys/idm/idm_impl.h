@@ -20,9 +20,8 @@
  */
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- */
-/*
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2011, 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
 #ifndef	_IDM_IMPL_H_
@@ -110,6 +109,11 @@ typedef enum {
 	REF_WAIT_SYNC,
 	REF_WAIT_ASYNC
 } idm_refcnt_wait_t;
+typedef struct idm_async_wait_ctx_s {
+	list_node_t		iawc_link;
+	idm_refcnt_cb_t		*iawc_cb;
+	void			*iawc_cb_ctx;
+} idm_async_wait_ctx_t;
 
 typedef struct idm_refcnt_s {
 	int			ir_refcnt;
@@ -117,6 +121,9 @@ typedef struct idm_refcnt_s {
 	idm_refcnt_wait_t	ir_waiting;
 	kmutex_t		ir_mutex;
 	kcondvar_t		ir_cv;
+	list_t			ir_async_waiters;
+	boolean_t		ir_sync_waiters;
+	boolean_t		ir_wait_taken;
 	idm_refcnt_cb_t		*ir_cb;
 	refcnt_audit_buf_t	ir_audit_buf;
 } idm_refcnt_t;
@@ -377,6 +384,7 @@ typedef struct idm_pdu_s {
 	uint32_t	isp_flags;
 	uint_t		isp_hdrbuflen;
 	uint_t		isp_databuflen;
+	time_t		isp_queue_time;
 	hrtime_t	isp_queue_time;
 
 	/* Taskq dispatching state for deferred PDU */
@@ -516,6 +524,8 @@ idm_conn_t *idm_conn_create_common(idm_conn_type_t conn_type,
     idm_transport_type_t tt, idm_conn_ops_t *conn_ops);
 
 void idm_conn_destroy_common(idm_conn_t *ic);
+
+boolean_t idm_conn_raddr_equals(idm_conn_t *c1, idm_conn_t *c2);
 
 void idm_conn_close(idm_conn_t *ic);
 
