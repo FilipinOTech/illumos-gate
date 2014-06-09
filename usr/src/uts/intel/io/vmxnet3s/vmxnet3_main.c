@@ -24,7 +24,7 @@
  * enhancements (see README.txt).
  */
 #define	BUILD_NUMBER_NUMERIC		261024
-#define	BUILD_NUMBER_NUMERIC_STRING	"261024-dx1"
+#define	BUILD_NUMBER_NUMERIC_STRING	"261024-il1"
 
 /*
  * TODO:
@@ -179,22 +179,26 @@ vmxnet3_getstat(void *data, uint_t stat, uint64_t *val)
          *val = 0;
          break;
       case MAC_STAT_RBYTES:
-         *val = rxStats->ucastBytesRxOK +
+         *val = rxStats->LROBytesRxOK +
+                rxStats->ucastBytesRxOK +
                 rxStats->mcastBytesRxOK +
                 rxStats->bcastBytesRxOK;
          break;
       case MAC_STAT_IPACKETS:
-         *val = rxStats->ucastPktsRxOK +
+         *val = rxStats->LROPktsRxOK +
+                rxStats->ucastPktsRxOK +
                 rxStats->mcastPktsRxOK +
                 rxStats->bcastPktsRxOK;
          break;
       case MAC_STAT_OBYTES:
-         *val = txStats->ucastBytesTxOK +
+         *val = txStats->TSOBytesTxOK +
+                txStats->ucastBytesTxOK +
                 txStats->mcastBytesTxOK +
                 txStats->bcastBytesTxOK;
          break;
       case MAC_STAT_OPACKETS:
-         *val = txStats->ucastPktsTxOK +
+         *val = txStats->TSOPktsTxOK +
+                txStats->ucastPktsTxOK +
                 txStats->mcastPktsTxOK +
                 txStats->bcastPktsTxOK;
          break;
@@ -955,12 +959,13 @@ vmxnet3_unicst(void *data, const uint8_t *macaddr)
  *
  * vmxnet3_change_mtu --
  *
- *    Change the MTU as seen by the driver. This is only supported when
- *    the mac is stopped.
+ *    Change the MTU as seen by the driver. Reset the device and tx/rx queues
+ *    so that buffers of right size are posted in rx queues.
+ *    This is only supported when the mac is stopped.
  *
  * Results:
  *    EBUSY if the device is enabled.
- *    EINVAL for invalid MTU values.
+ *    EINVAL for invalid MTU values or other failures.
  *    0 on success.
  *
  * Side effects:
@@ -972,7 +977,8 @@ vmxnet3_unicst(void *data, const uint8_t *macaddr)
 static int
 vmxnet3_change_mtu(vmxnet3_softc_t *dp, uint32_t new_mtu)
 {
-   int ret;
+   int ret = 0, do_reset = 0, macret;
+   ASSERT(dp);
 
    if (dp->devEnabled)
       return EBUSY;
@@ -988,10 +994,24 @@ vmxnet3_change_mtu(vmxnet3_softc_t *dp, uint32_t new_mtu)
       return EINVAL;
    }
 
+   if (dp->devEnabled) {
+      do_reset = 1;
+      vmxnet3_stop(dp);
+      VMXNET3_BAR1_PUT32(dp, VMXNET3_REG_CMD, VMXNET3_CMD_RESET_DEV);
+   }
+
    dp->cur_mtu = new_mtu;
 
-   if ((ret = mac_maxsdu_update(dp->mac, new_mtu)) != 0)
-      VMXNET3_WARN(dp, "Unable to update mac with %d mtu: %d", new_mtu, ret);
+   if (do_reset) {
+      if ((ret = vmxnet3_start(dp)) != 0)
+	 VMXNET3_WARN(dp, "Unable to restart the device: %d", ret);
+   }
+
+   if ((macret = mac_maxsdu_update(dp->mac, new_mtu)) != 0) {
+      VMXNET3_WARN(dp, "Unable to update mac with %d mtu: %d", new_mtu, macret);
+      if (ret == 0)
+         ret = macret;
+   }
 
    return ret;
 }
@@ -1816,5 +1836,13 @@ int _info(struct modinfo *modinfop)
 void
 vmxnet3_log(int level, vmxnet3_softc_t *dp, char *fmt, ...)
 {
+   va_list ap;
+   char buf[256];
+
+   va_start(ap, fmt);
+   (void) vsnprintf(buf, sizeof (buf), fmt, ap);
+   va_end(ap);
+
+   cmn_err(level, VMXNET3_MODNAME ":%d: %s", dp->instance, buf);
    dev_err(dp->dip, level, fmt);
 }

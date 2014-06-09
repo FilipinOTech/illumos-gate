@@ -156,6 +156,8 @@ static void
 vmxnet3_put_rxbuf(vmxnet3_rxbuf_t *rxBuf)
 {
    vmxnet3_softc_t *dp = rxBuf->dp;
+   vmxnet3_rxpool_t *rxPool = &dp->rxPool;
+   boolean_t returned = B_FALSE;
 
    VMXNET3_DEBUG(dp, 5, "free 0x%p\n", rxBuf);
 
@@ -191,6 +193,13 @@ vmxnet3_get_rxpool_buf(vmxnet3_softc_t *dp)
       rxPool->nBufs--;
       ASSERT((rxPool->listHead == NULL && rxPool->nBufs == 0) ||
          (rxPool->listHead != NULL && rxPool->nBufs != 0));
+      VMXNET3_DEBUG(dp, 5, "alloc 0x%p from pool\n", rxBuf);
+   } else {
+      rxBuf = vmxnet3_alloc_rxbuf(dp, canSleep);
+      if (!rxBuf) {
+         goto done;
+      }
+      VMXNET3_DEBUG(dp, 5, "alloc 0x%p from mem\n", rxBuf);
    }
    mutex_exit(&dp->rxPoolLock);
    return rxBuf;
@@ -216,10 +225,22 @@ static vmxnet3_rxbuf_t *
 vmxnet3_get_rxbuf(vmxnet3_softc_t *dp, boolean_t canSleep)
 {
    vmxnet3_rxbuf_t *rxBuf;
+   vmxnet3_rxpool_t *rxPool = &dp->rxPool;
+
+   ASSERT(rxBuf);
 
    if ((rxBuf = vmxnet3_get_rxpool_buf(dp))) {
       VMXNET3_DEBUG(dp, 5, "alloc 0x%p from pool\n", rxBuf);
    } else if ((rxBuf = vmxnet3_alloc_rxbuf(dp, canSleep))) {
+      if (!rxBuf) {
+         goto done;
+      }
+      VMXNET3_DEBUG(dp, 5, "alloc 0x%p from mem\n", rxBuf);
+   } else {
+      rxBuf = vmxnet3_alloc_rxbuf(dp, canSleep);
+      if (!rxBuf) {
+         goto done;
+      }
       VMXNET3_DEBUG(dp, 5, "alloc 0x%p from mem\n", rxBuf);
    }
 
@@ -234,6 +255,7 @@ vmxnet3_get_rxbuf(vmxnet3_softc_t *dp, boolean_t canSleep)
       }
    }
 
+done:
    return rxBuf;
 }
 
@@ -337,6 +359,7 @@ error:
 void
 vmxnet3_rxqueue_fini(vmxnet3_softc_t *dp, vmxnet3_rxqueue_t *rxq)
 {
+   vmxnet3_rxpool_t *rxPool = &dp->rxPool;
    vmxnet3_rxbuf_t *rxBuf;
    unsigned int i;
 
