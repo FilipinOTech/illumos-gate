@@ -22,7 +22,10 @@
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+# Copyright (c) 2012, Joyent, Inc. All rights reserved.
+# Copyright (c) 2012, OmniTI Computer Consulting, Inc. All rights reserved.
 # Copyright (c) 2013 Gary Mills
+# Copyright (c) 2013 by Delphix. All rights reserved.
 #
 
 <include SUNWcs.man1.inc>
@@ -403,6 +406,7 @@ file path=etc/nsswitch.conf group=sys preserve=true
 file path=etc/nsswitch.dns group=sys
 file path=etc/nsswitch.files group=sys
 file path=etc/nsswitch.ldap group=sys
+file path=etc/nsswitch.mdns group=sys
 file path=etc/pam.conf group=sys preserve=true
 file path=etc/passwd group=sys preserve=true
 file path=etc/profile group=sys preserve=true
@@ -441,6 +445,7 @@ file path=etc/security/prof_attr group=sys preserve=true \
     timestamp=19700101T000000Z
 file path=etc/security/prof_attr.d/SUNWcs group=sys
 file path=etc/shadow group=sys mode=0400 preserve=true
+file path=etc/skel/.bashrc group=other preserve=true
 file path=etc/skel/.profile group=other preserve=true
 file path=etc/skel/local.cshrc group=sys preserve=true
 file path=etc/skel/local.login group=sys preserve=true
@@ -495,6 +500,7 @@ file path=lib/svc/manifest/milestone/name-services.xml group=sys mode=0444
 file path=lib/svc/manifest/milestone/network.xml group=sys mode=0444
 file path=lib/svc/manifest/milestone/single-user.xml group=sys mode=0444
 file path=lib/svc/manifest/milestone/sysconfig.xml group=sys mode=0444
+file path=lib/svc/manifest/network/dhcp-client.xml group=sys mode=0444
 file path=lib/svc/manifest/network/dlmgmt.xml group=sys mode=0444
 file path=lib/svc/manifest/network/dns/client.xml group=sys mode=0444
 file path=lib/svc/manifest/network/dns/install.xml group=sys mode=0444
@@ -506,6 +512,7 @@ file path=lib/svc/manifest/network/ipsec/ipsecalgs.xml group=sys mode=0444
 file path=lib/svc/manifest/network/ipsec/manual-key.xml group=sys mode=0444
 file path=lib/svc/manifest/network/ipsec/policy.xml group=sys mode=0444
 file path=lib/svc/manifest/network/ldap/client.xml group=sys mode=0444
+file path=lib/svc/manifest/network/network-datalink.xml group=sys mode=0444
 file path=lib/svc/manifest/network/network-initial.xml group=sys mode=0444
 file path=lib/svc/manifest/network/network-install.xml group=sys mode=0444
 file path=lib/svc/manifest/network/network-ipmgmt.xml group=sys mode=0444
@@ -571,6 +578,7 @@ file path=lib/svc/method/boot-archive-update mode=0555
 file path=lib/svc/method/console-login mode=0555
 file path=lib/svc/method/devices-audio mode=0555
 file path=lib/svc/method/devices-local mode=0555
+file path=lib/svc/method/dhcp-client mode=0555
 file path=lib/svc/method/dns-install mode=0555
 file path=lib/svc/method/fs-local mode=0555
 file path=lib/svc/method/fs-minimal mode=0555
@@ -584,6 +592,7 @@ file path=lib/svc/method/ldap-client mode=0555
 file path=lib/svc/method/logadm-upgrade mode=0555
 file path=lib/svc/method/manifest-import mode=0555
 file path=lib/svc/method/mpxio-upgrade mode=0555
+file path=lib/svc/method/net-datalink mode=0555
 file path=lib/svc/method/net-init mode=0555
 file path=lib/svc/method/net-install mode=0555
 file path=lib/svc/method/net-ipmgmt mode=0555
@@ -596,6 +605,7 @@ file path=lib/svc/method/net-nwam mode=0555
 file path=lib/svc/method/net-physical mode=0555
 file path=lib/svc/method/net-routing-setup mode=0555
 file path=lib/svc/method/net-svc mode=0555
+file path=lib/svc/method/net-upgrade mode=0555
 file path=lib/svc/method/rmtmpfiles mode=0555
 file path=lib/svc/method/rpc-bind mode=0555
 file path=lib/svc/method/svc-allocate mode=0555

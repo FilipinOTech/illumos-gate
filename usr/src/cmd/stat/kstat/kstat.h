@@ -107,7 +107,7 @@ typedef union ks_value {
 {							\
 	ks_value_t v;					\
 	v.str.addr.ptr = safe_strdup(S->N);		\
-	v.str.len = strlen(S->N);			\
+	v.str.len = (S->N) == NULL ? 0 : strlen(S->N);	\
 	nvpair_insert(I, #N, &v, KSTAT_DATA_STRING);	\
 }
 

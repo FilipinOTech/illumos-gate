@@ -24,7 +24,7 @@
  * Portions Copyright 2010 Robert Milkowski
  *
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
@@ -142,6 +142,11 @@ typedef struct zvol_state {
  */
 int zvol_maxphys = DMU_MAX_ACCESS/2;
 
+/*
+ * Toggle unmap functionality.
+ */
+boolean_t zvol_unmap_enabled = B_FALSE;
+
 extern int zfs_set_prop_nvlist(const char *, zprop_source_t,
     nvlist_t *, nvlist_t *);
 static int zvol_remove_zv(zvol_state_t *);
@@ -253,6 +258,8 @@ zvol_map_block(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	if (BP_IS_HOLE(bp) ||
 	    zb->zb_object != ZVOL_OBJ || zb->zb_level != 0)
 		return (0);
+
+	VERIFY(!BP_IS_EMBEDDED(bp));
 
 	VERIFY3U(ma->ma_blks, ==, zb->zb_blkid);
 	ma->ma_blks++;
@@ -1766,6 +1773,9 @@ zvol_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cr, int *rvalp)
 		dkioc_free_t df;
 		dmu_tx_t *tx;
 
+		if (!zvol_unmap_enabled)
+			break;
+
 		if (ddi_copyin((void *)arg, &df, sizeof (df), flag)) {
 			error = SET_ERROR(EFAULT);
 			break;
@@ -1778,8 +1788,8 @@ zvol_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cr, int *rvalp)
 		 */
 		if (df.df_start >= zv->zv_volsize)
 			break;	/* No need to do anything... */
-		if (df.df_start + df.df_length > zv->zv_volsize)
-			df.df_length = DMU_OBJECT_END;
+
+		mutex_exit(&zfsdev_state_lock);
 
 		rl = zfs_range_lock(&zv->zv_znode, df.df_start, df.df_length,
 		    RL_WRITER);
@@ -1817,7 +1827,7 @@ zvol_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cr, int *rvalp)
 				    dmu_objset_pool(zv->zv_objset), 0);
 			}
 		}
-		break;
+		return (error);
 	}
 
 	default:

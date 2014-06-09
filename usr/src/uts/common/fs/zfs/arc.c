@@ -20,10 +20,10 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2011, 2013 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2013, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2014 by Saso Kiselkov. All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -105,8 +105,8 @@
  * with the buffer may be evicted prior to the callback.  The callback
  * must be made with *no locks held* (to prevent deadlock).  Additionally,
  * the users of callbacks must ensure that their private data is
- * protected from simultaneous callbacks from arc_buf_evict()
- * and arc_do_user_evicts().
+ * protected from simultaneous callbacks from arc_clear_callback()
+ * (arc_buf_evict() previously) and arc_do_user_evicts().
  *
  * Note that the majority of the performance stats are manipulated
  * with atomic operations.
@@ -200,6 +200,7 @@ int zfs_arc_grow_retry = 0;
 int zfs_arc_shrink_shift = 0;
 int zfs_arc_p_min_shift = 0;
 int zfs_disable_dup_eviction = 0;
+int arc_average_blocksize = 8 * 1024; /* 8KB */
 
 /*
  * Note that buffers can be in one of 6 states:
@@ -744,8 +745,10 @@ buf_discard_identity(arc_buf_hdr_t *hdr)
 }
 
 static arc_buf_hdr_t *
-buf_hash_find(uint64_t spa, const dva_t *dva, uint64_t birth, kmutex_t **lockp)
+buf_hash_find(uint64_t spa, const blkptr_t *bp, kmutex_t **lockp)
 {
+	const dva_t *dva = BP_IDENTITY(bp);
+	uint64_t birth = BP_PHYSICAL_BIRTH(bp);
 	uint64_t idx = BUF_HASH_INDEX(spa, dva, birth);
 	kmutex_t *hash_lock = BUF_HASH_LOCK(idx);
 	arc_buf_hdr_t *buf;
@@ -777,6 +780,8 @@ buf_hash_insert(arc_buf_hdr_t *buf, kmutex_t **lockp)
 	arc_buf_hdr_t *fbuf;
 	uint32_t i;
 
+	ASSERT(!DVA_IS_EMPTY(&buf->b_dva));
+	ASSERT(buf->b_birth != 0);
 	ASSERT(!HDR_IN_HASH_TABLE(buf));
 	*lockp = hash_lock;
 	mutex_enter(hash_lock);
@@ -934,10 +939,11 @@ buf_init(void)
 
 	/*
 	 * The hash table is big enough to fill all of physical memory
-	 * with an average 64K block size.  The table will take up
-	 * totalmem*sizeof(void*)/64K (eg. 128KB/GB with 8-byte pointers).
+	 * with an average block size of arc_average_blocksize (default 8K).
+	 * By default, the table will take up
+	 * totalmem * sizeof(void*) / 8K (1MB per GB with 8-byte pointers).
 	 */
-	while (hsize * 65536 < physmem * PAGESIZE)
+	while (hsize * arc_average_blocksize < physmem * PAGESIZE)
 		hsize <<= 1;
 retry:
 	buf_hash_table.ht_mask = hsize - 1;
@@ -1491,8 +1497,12 @@ arc_buf_data_free(arc_buf_t *buf, void (*free_func)(void *, size_t))
 	}
 }
 
+/*
+ * Free up buf->b_data and if 'remove' is set, then pull the
+ * arc_buf_t off of the the arc_buf_hdr_t's list and free it.
+ */
 static void
-arc_buf_destroy(arc_buf_t *buf, boolean_t recycle, boolean_t all)
+arc_buf_destroy(arc_buf_t *buf, boolean_t recycle, boolean_t remove)
 {
 	arc_buf_t **bufp;
 
@@ -1543,7 +1553,7 @@ arc_buf_destroy(arc_buf_t *buf, boolean_t recycle, boolean_t all)
 	}
 
 	/* only remove the buf if requested */
-	if (!all)
+	if (!remove)
 		return;
 
 	/* remove the buf from the hdr list */
@@ -2115,7 +2125,7 @@ arc_do_user_evicts(void)
 		mutex_exit(&arc_eviction_mtx);
 
 		if (buf->b_efunc != NULL)
-			VERIFY(buf->b_efunc(buf) == 0);
+			VERIFY0(buf->b_efunc(buf->b_private));
 
 		buf->b_efunc = NULL;
 		buf->b_private = NULL;
@@ -2738,10 +2748,10 @@ arc_getbuf_func(zio_t *zio, arc_buf_t *buf, void *arg)
 static void
 arc_read_done(zio_t *zio)
 {
-	arc_buf_hdr_t	*hdr, *found;
+	arc_buf_hdr_t	*hdr;
 	arc_buf_t	*buf;
 	arc_buf_t	*abuf;	/* buffer we're assigning to callback */
-	kmutex_t	*hash_lock;
+	kmutex_t	*hash_lock = NULL;
 	arc_callback_t	*callback_list, *acb;
 	int		freeable = FALSE;
 
@@ -2756,12 +2766,22 @@ arc_read_done(zio_t *zio)
 	 * reason for it not to be found is if we were freed during the
 	 * read.
 	 */
-	found = buf_hash_find(hdr->b_spa, &hdr->b_dva, hdr->b_birth,
-	    &hash_lock);
+	if (HDR_IN_HASH_TABLE(hdr)) {
+		ASSERT3U(hdr->b_birth, ==, BP_PHYSICAL_BIRTH(zio->io_bp));
+		ASSERT3U(hdr->b_dva.dva_word[0], ==,
+		    BP_IDENTITY(zio->io_bp)->dva_word[0]);
+		ASSERT3U(hdr->b_dva.dva_word[1], ==,
+		    BP_IDENTITY(zio->io_bp)->dva_word[1]);
 
-	ASSERT((found == NULL && HDR_FREED_IN_READ(hdr) && hash_lock == NULL) ||
-	    (found == hdr && DVA_EQUAL(&hdr->b_dva, BP_IDENTITY(zio->io_bp))) ||
-	    (found == hdr && HDR_L2_READING(hdr)));
+		arc_buf_hdr_t *found = buf_hash_find(hdr->b_spa, zio->io_bp,
+		    &hash_lock);
+
+		ASSERT((found == NULL && HDR_FREED_IN_READ(hdr) &&
+		    hash_lock == NULL) ||
+		    (found == hdr &&
+		    DVA_EQUAL(&hdr->b_dva, BP_IDENTITY(zio->io_bp))) ||
+		    (found == hdr && HDR_L2_READING(hdr)));
+	}
 
 	hdr->b_flags &= ~ARC_L2_EVICTED;
 	if (l2arc_noprefetch && (hdr->b_flags & ARC_PREFETCH))
@@ -2885,16 +2905,25 @@ arc_read(zio_t *pio, spa_t *spa, const blkptr_t *bp, arc_done_func_t *done,
     void *private, zio_priority_t priority, int zio_flags, uint32_t *arc_flags,
     const zbookmark_t *zb)
 {
-	arc_buf_hdr_t *hdr;
+	arc_buf_hdr_t *hdr = NULL;
 	arc_buf_t *buf = NULL;
-	kmutex_t *hash_lock;
+	kmutex_t *hash_lock = NULL;
 	zio_t *rzio;
 	uint64_t guid = spa_load_guid(spa);
 
+	ASSERT(!BP_IS_EMBEDDED(bp) ||
+	    BPE_GET_ETYPE(bp) == BP_EMBEDDED_TYPE_DATA);
+
 top:
-	hdr = buf_hash_find(guid, BP_IDENTITY(bp), BP_PHYSICAL_BIRTH(bp),
-	    &hash_lock);
-	if (hdr && hdr->b_datacnt > 0) {
+	if (!BP_IS_EMBEDDED(bp)) {
+		/*
+		 * Embedded BP's have no DVA and require no I/O to "read".
+		 * Create an anonymous arc buf to back it.
+		 */
+		hdr = buf_hash_find(guid, bp, &hash_lock);
+	}
+
+	if (hdr != NULL && hdr->b_datacnt > 0) {
 
 		*arc_flags |= ARC_CACHED;
 
@@ -2968,7 +2997,7 @@ top:
 			done(NULL, buf, private);
 	} else {
 		uint64_t size = BP_GET_LSIZE(bp);
-		arc_callback_t	*acb;
+		arc_callback_t *acb;
 		vdev_t *vd = NULL;
 		uint64_t addr = 0;
 		boolean_t devw = B_FALSE;
@@ -2977,15 +3006,17 @@ top:
 
 		if (hdr == NULL) {
 			/* this block is not in the cache */
-			arc_buf_hdr_t	*exists;
+			arc_buf_hdr_t *exists = NULL;
 			arc_buf_contents_t type = BP_GET_BUFC_TYPE(bp);
 			buf = arc_buf_alloc(spa, size, private, type);
 			hdr = buf->b_hdr;
-			hdr->b_dva = *BP_IDENTITY(bp);
-			hdr->b_birth = BP_PHYSICAL_BIRTH(bp);
-			hdr->b_cksum0 = bp->blk_cksum.zc_word[0];
-			exists = buf_hash_insert(hdr, &hash_lock);
-			if (exists) {
+			if (!BP_IS_EMBEDDED(bp)) {
+				hdr->b_dva = *BP_IDENTITY(bp);
+				hdr->b_birth = BP_PHYSICAL_BIRTH(bp);
+				hdr->b_cksum0 = bp->blk_cksum.zc_word[0];
+				exists = buf_hash_insert(hdr, &hash_lock);
+			}
+			if (exists != NULL) {
 				/* somebody beat us to the hash insert */
 				mutex_exit(hash_lock);
 				buf_discard_identity(hdr);
@@ -3043,7 +3074,7 @@ top:
 		hdr->b_acb = acb;
 		hdr->b_flags |= ARC_IO_IN_PROGRESS;
 
-		if (hdr->b_l2hdr != NULL &&
+		if (HDR_L2CACHE(hdr) && hdr->b_l2hdr != NULL &&
 		    (vd = hdr->b_l2hdr->b_dev->l2ad_vdev) != NULL) {
 			devw = hdr->b_l2hdr->b_dev->l2ad_writing;
 			addr = hdr->b_l2hdr->b_daddr;
@@ -3057,7 +3088,8 @@ top:
 				vd = NULL;
 		}
 
-		mutex_exit(hash_lock);
+		if (hash_lock != NULL)
+			mutex_exit(hash_lock);
 
 		/*
 		 * At this point, we have a level 1 cache miss.  Try again in
@@ -3096,7 +3128,7 @@ top:
 				cb->l2rcb_bp = *bp;
 				cb->l2rcb_zb = *zb;
 				cb->l2rcb_flags = zio_flags;
-				cb->l2rcb_compress = b_compress;
+				cb->l2rcb_compress = hdr->b_l2hdr->b_compress;
 
 				ASSERT(addr >= VDEV_LABEL_START_SIZE &&
 				    addr + size < vd->vdev_psize -
@@ -3108,7 +3140,8 @@ top:
 				 * Issue a null zio if the underlying buffer
 				 * was squashed to zero size by compression.
 				 */
-				if (b_compress == ZIO_COMPRESS_EMPTY) {
+				if (hdr->b_l2hdr->b_compress ==
+				    ZIO_COMPRESS_EMPTY) {
 					rzio = zio_null(pio, spa, vd,
 					    l2arc_read_done, cb,
 					    zio_flags | ZIO_FLAG_DONT_CACHE |
@@ -3117,8 +3150,8 @@ top:
 					    ZIO_FLAG_DONT_RETRY);
 				} else {
 					rzio = zio_read_phys(pio, vd, addr,
-					    b_asize, buf->b_data,
-					    ZIO_CHECKSUM_OFF,
+					    hdr->b_l2hdr->b_asize,
+					    buf->b_data, ZIO_CHECKSUM_OFF,
 					    l2arc_read_done, cb, priority,
 					    zio_flags | ZIO_FLAG_DONT_CACHE |
 					    ZIO_FLAG_CANFAIL |
@@ -3127,7 +3160,8 @@ top:
 				}
 				DTRACE_PROBE2(l2arc__read, vdev_t *, vd,
 				    zio_t *, rzio);
-				ARCSTAT_INCR(arcstat_l2_read_bytes, b_asize);
+				ARCSTAT_INCR(arcstat_l2_read_bytes,
+				    hdr->b_l2hdr->b_asize);
 
 				if (*arc_flags & ARC_NOWAIT) {
 					zio_nowait(rzio);
@@ -3192,8 +3226,9 @@ arc_freed(spa_t *spa, const blkptr_t *bp)
 	kmutex_t *hash_lock;
 	uint64_t guid = spa_load_guid(spa);
 
-	hdr = buf_hash_find(guid, BP_IDENTITY(bp), BP_PHYSICAL_BIRTH(bp),
-	    &hash_lock);
+	ASSERT(!BP_IS_EMBEDDED(bp));
+
+	hdr = buf_hash_find(guid, bp, &hash_lock);
 	if (hdr == NULL)
 		return;
 	if (HDR_BUF_AVAILABLE(hdr)) {
@@ -3211,16 +3246,26 @@ arc_freed(spa_t *spa, const blkptr_t *bp)
 }
 
 /*
- * This is used by the DMU to let the ARC know that a buffer is
- * being evicted, so the ARC should clean up.  If this arc buf
- * is not yet in the evicted state, it will be put there.
+ * Clear the user eviction callback set by arc_set_callback(), first calling
+ * it if it exists.  Because the presence of a callback keeps an arc_buf cached
+ * clearing the callback may result in the arc_buf being destroyed.  However,
+ * it will not result in the *last* arc_buf being destroyed, hence the data
+ * will remain cached in the ARC. We make a copy of the arc buffer here so
+ * that we can process the callback without holding any locks.
+ *
+ * It's possible that the callback is already in the process of being cleared
+ * by another thread.  In this case we can not clear the callback.
+ *
+ * Returns B_TRUE if the callback was successfully called and cleared.
  */
-int
-arc_buf_evict(arc_buf_t *buf)
+boolean_t
+arc_clear_callback(arc_buf_t *buf)
 {
 	arc_buf_hdr_t *hdr;
 	kmutex_t *hash_lock;
 	arc_buf_t **bufp;
+	arc_evict_func_t *efunc = buf->b_efunc;
+	void *private = buf->b_private;
 
 	mutex_enter(&buf->b_evict_lock);
 	hdr = buf->b_hdr;
@@ -3230,7 +3275,7 @@ arc_buf_evict(arc_buf_t *buf)
 		 */
 		ASSERT(buf->b_data == NULL);
 		mutex_exit(&buf->b_evict_lock);
-		return (0);
+		return (B_FALSE);
 	} else if (buf->b_data == NULL) {
 		arc_buf_t copy = *buf; /* structure assignment */
 		/*
@@ -3239,8 +3284,8 @@ arc_buf_evict(arc_buf_t *buf)
 		 */
 		buf->b_efunc = NULL;
 		mutex_exit(&buf->b_evict_lock);
-		VERIFY(copy.b_efunc(&copy) == 0);
-		return (1);
+		VERIFY(copy.b_efunc(&copy) == 0 || efunc(private) == 0);
+		return (B_TRUE);
 	}
 	hash_lock = HDR_LOCK(hdr);
 	mutex_enter(hash_lock);
@@ -3282,16 +3327,23 @@ arc_buf_evict(arc_buf_t *buf)
 		mutex_exit(&evicted_state->arcs_mtx);
 		mutex_exit(&old_state->arcs_mtx);
 	}
-	mutex_exit(hash_lock);
-	mutex_exit(&buf->b_evict_lock);
 
-	VERIFY(buf->b_efunc(buf) == 0);
+	if (hdr->b_datacnt > 1) {
+		mutex_exit(&buf->b_evict_lock);
+		arc_buf_destroy(buf, FALSE, TRUE);
+	} else {
+		ASSERT(buf == hdr->b_buf);
+		hdr->b_flags |= ARC_BUF_AVAILABLE;
+		mutex_exit(&buf->b_evict_lock);
+	}
+	mutex_exit(hash_lock);
+	VERIFY(buf->b_efunc(buf) == 0 || efunc(private) == 0);
 	buf->b_efunc = NULL;
 	buf->b_private = NULL;
 	buf->b_hdr = NULL;
 	buf->b_next = NULL;
 	kmem_cache_free(buf_cache, buf);
-	return (1);
+	return (B_TRUE);
 }
 
 /*
@@ -3418,6 +3470,7 @@ arc_release(arc_buf_t *buf, void *tag)
 
 	if (l2hdr) {
 		ARCSTAT_INCR(arcstat_l2_asize, -l2hdr->b_asize);
+		list_remove(l2hdr->b_dev->l2ad_buflist, hdr);
 		kmem_free(l2hdr, sizeof (l2arc_buf_hdr_t));
 		ARCSTAT_INCR(arcstat_l2_size, -buf_size);
 		mutex_exit(&l2arc_buflist_mtx);
@@ -3509,7 +3562,7 @@ arc_write_done(zio_t *zio)
 	ASSERT(hdr->b_acb == NULL);
 
 	if (zio->io_error == 0) {
-		if (BP_IS_HOLE(zio->io_bp)) {
+		if (BP_IS_HOLE(zio->io_bp) || BP_IS_EMBEDDED(zio->io_bp)) {
 			buf_discard_identity(hdr);
 		} else {
 			hdr->b_dva = *BP_IDENTITY(zio->io_bp);
@@ -3521,10 +3574,10 @@ arc_write_done(zio_t *zio)
 	}
 
 	/*
-	 * If the block to be written was all-zero, we may have
-	 * compressed it away.  In this case no write was performed
-	 * so there will be no dva/birth/checksum.  The buffer must
-	 * therefore remain anonymous (and uncached).
+	 * If the block to be written was all-zero or compressed enough to be
+	 * embedded in the BP, no write was performed so there will be no
+	 * dva/birth/checksum.  The buffer must therefore remain anonymous
+	 * (and uncached).
 	 */
 	if (!BUF_EMPTY(hdr)) {
 		arc_buf_hdr_t *exists;
@@ -4818,7 +4871,7 @@ static boolean_t
 l2arc_compress_buf(l2arc_buf_hdr_t *l2hdr)
 {
 	void *cdata;
-	size_t csize, len;
+	size_t csize, len, rounded;
 
 	ASSERT(l2hdr->b_compress == ZIO_COMPRESS_OFF);
 	ASSERT(l2hdr->b_tmp_cdata != NULL);
@@ -4827,6 +4880,12 @@ l2arc_compress_buf(l2arc_buf_hdr_t *l2hdr)
 	cdata = zio_data_buf_alloc(len);
 	csize = zio_compress_data(ZIO_COMPRESS_LZ4, l2hdr->b_tmp_cdata,
 	    cdata, l2hdr->b_asize);
+
+	rounded = P2ROUNDUP(csize, (size_t)SPA_MINBLOCKSIZE);
+	if (rounded > csize) {
+		bzero((char *)cdata + csize, rounded - csize);
+		csize = rounded;
+	}
 
 	if (csize == 0) {
 		/* zero block, indicate that there's nothing to write */

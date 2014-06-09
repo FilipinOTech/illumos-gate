@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
  */
 /*
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
@@ -572,6 +573,13 @@ _thrp_create(void *stk, size_t stksize, void *(*func)(void *), void *arg,
 	 * Also, disallow thread creation to a child of vfork().
 	 */
 	if (!self->ul_primarymap || self->ul_vfork)
+		return (ENOTSUP);
+
+	/*
+	 * Audit libraries may not create threads as they are effectively part
+	 * of the linker.
+	 */
+	if (self->ul_rtld || !primary_link_map)
 		return (ENOTSUP);
 
 	if (udp->hash_size == 1)
@@ -1263,7 +1271,6 @@ libc_init(void)
 	if (oldself != NULL && (oldself->ul_primarymap || !primary_link_map)) {
 		__tdb_bootstrap = oldself->ul_uberdata->tdb_bootstrap;
 		mutex_setup();
-		atfork_init();	/* every link map needs atfork() processing */
 		init_progname();
 		return;
 	}
@@ -2237,8 +2244,8 @@ _ti_bind_guard(int flags)
 	self->ul_bindflags |= bindflag;
 	if ((flags & (THR_FLG_NOLOCK | THR_FLG_REENTER)) == THR_FLG_NOLOCK) {
 		sigoff(self);	/* see no signals while holding ld_lock */
-		self->ul_rtld++;	/* don't suspend while in ld.so.1 */
 		(void) mutex_lock(&udp->ld_lock);
+		self->ul_rtld++;	/* don't suspend while in ld.so.1 */
 	}
 	enter_critical(self);
 	self->ul_save_state = self->ul_cancel_disabled;
@@ -2262,8 +2269,8 @@ _ti_bind_clear(int flags)
 	exit_critical(self);
 	if ((flags & (THR_FLG_NOLOCK | THR_FLG_REENTER)) == THR_FLG_NOLOCK) {
 		if (MUTEX_OWNED(&udp->ld_lock, self)) {
-			(void) mutex_unlock(&udp->ld_lock);
 			self->ul_rtld--;
+			(void) mutex_unlock(&udp->ld_lock);
 			sigon(self);	/* reenable signals */
 		}
 	}

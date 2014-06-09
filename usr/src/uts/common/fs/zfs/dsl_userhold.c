@@ -207,7 +207,7 @@ dsl_dataset_user_release_onexit(void *arg)
 		return;
 	}
 
-	(void) dsl_dataset_user_release_tmp(spa_get_dsl(spa), ca->zhca_holds);
+	dsl_dataset_user_release_tmp(spa_get_dsl(spa), ca->zhca_holds);
 	fnvlist_free(ca->zhca_holds);
 	kmem_free(ca, sizeof (zfs_hold_cleanup_arg_t));
 	spa_close(spa, FTAG);
@@ -600,8 +600,7 @@ dsl_dataset_user_release_impl(nvlist_t *holds, nvlist_t *errlist,
 	ddura.ddura_chkholds = fnvlist_alloc();
 
 	error = dsl_sync_task(pool, dsl_dataset_user_release_check,
-	    dsl_dataset_user_release_sync, &ddura,
-	    fnvlist_num_pairs(holds));
+	    dsl_dataset_user_release_sync, &ddura, 0);
 	fnvlist_free(ddura.ddura_todelete);
 	fnvlist_free(ddura.ddura_chkholds);
 

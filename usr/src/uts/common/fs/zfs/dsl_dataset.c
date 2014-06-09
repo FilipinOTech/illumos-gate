@@ -62,7 +62,7 @@
 #define	DSL_DEADLIST_BLOCKSIZE	SPA_MAXBLOCKSIZE
 
 /*
- * Figure out how much of this delta should be propogated to the dsl_dir
+ * Figure out how much of this delta should be propagated to the dsl_dir
  * layer.  If there's a refreservation, that space has already been
  * partially accounted for in our ancestors.
  */
@@ -386,10 +386,17 @@ dsl_dataset_hold_obj(dsl_pool_t *dp, uint64_t dsobj, void *tag,
 		list_create(&ds->ds_sendstreams, sizeof (dmu_sendarg_t),
 		    offsetof(dmu_sendarg_t, dsa_link));
 
-		if (err == 0) {
-			err = dsl_dir_hold_obj(dp,
-			    ds->ds_phys->ds_dir_obj, NULL, ds, &ds->ds_dir);
+		if (doi.doi_type == DMU_OTN_ZAP_METADATA) {
+			err = zap_contains(mos, dsobj, DS_FIELD_MOOCH_BYTESWAP);
+			if (err == 0)
+				ds->ds_mooch_byteswap = B_TRUE;
+			else
+				ASSERT3U(err, ==, ENOENT);
+
 		}
+
+		err = dsl_dir_hold_obj(dp,
+		    ds->ds_phys->ds_dir_obj, NULL, ds, &ds->ds_dir);
 		if (err != 0) {
 			mutex_destroy(&ds->ds_lock);
 			mutex_destroy(&ds->ds_opening_lock);
@@ -690,6 +697,11 @@ dsl_dataset_create_sync_dd(dsl_dir_t *dd, dsl_dataset_t *origin,
 		    origin->ds_phys->ds_uncompressed_bytes;
 		dsphys->ds_bp = origin->ds_phys->ds_bp;
 		dsphys->ds_flags |= origin->ds_phys->ds_flags;
+
+		if (origin->ds_mooch_byteswap) {
+			dsl_dataset_activate_mooch_byteswap_sync_impl(dsobj,
+			    tx);
+		}
 
 		dmu_buf_will_dirty(origin->ds_dbuf, tx);
 		origin->ds_phys->ds_num_children++;
@@ -1204,6 +1216,9 @@ dsl_dataset_snapshot_sync_impl(dsl_dataset_t *ds, const char *snapname,
 	dsphys->ds_bp = ds->ds_phys->ds_bp;
 	dmu_buf_rele(dbuf, FTAG);
 
+	if (ds->ds_mooch_byteswap)
+		dsl_dataset_activate_mooch_byteswap_sync_impl(dsobj, tx);
+
 	ASSERT3U(ds->ds_prev != 0, ==, ds->ds_phys->ds_prev_snap_obj != 0);
 	if (ds->ds_prev) {
 		uint64_t next_clones_obj =
@@ -1543,6 +1558,12 @@ dsl_dataset_stats(dsl_dataset_t *ds, nvlist_t *nv)
 		    ds->ds_phys->ds_unique_bytes);
 		get_clones_stat(ds, nv);
 	} else {
+		if (ds->ds_prev != NULL && ds->ds_prev != dp->dp_origin_snap) {
+			char buf[MAXNAMELEN];
+			dsl_dataset_name(ds->ds_prev, buf);
+			dsl_prop_nvlist_add_string(nv, ZFS_PROP_PREV_SNAP, buf);
+		}
+
 		dsl_dir_stats(ds->ds_dir, nv);
 	}
 
@@ -1568,6 +1589,8 @@ dsl_dataset_stats(dsl_dataset_t *ds, nvlist_t *nv)
 	    ds->ds_userrefs);
 	dsl_prop_nvlist_add_uint64(nv, ZFS_PROP_DEFER_DESTROY,
 	    DS_IS_DEFER_DESTROY(ds) ? 1 : 0);
+	dsl_prop_nvlist_add_uint64(nv, ZFS_PROP_MOOCH_BYTESWAP,
+	    ds->ds_mooch_byteswap ? 1 : 0);
 
 	if (ds->ds_phys->ds_prev_snap_obj != 0) {
 		uint64_t written, comp, uncomp;
@@ -1641,7 +1664,7 @@ dsl_dataset_space(dsl_dataset_t *ds,
 		else
 			*availbytesp = 0;
 	}
-	*usedobjsp = ds->ds_phys->ds_bp.blk_fill;
+	*usedobjsp = BP_GET_FILL(&ds->ds_phys->ds_bp);
 	*availobjsp = DN_MAX_OBJECT - *usedobjsp;
 }
 
@@ -2014,8 +2037,18 @@ dsl_dataset_promote_check(void *arg, dmu_tx_t *tx)
 		return (err);
 
 	hds = ddpa->ddpa_clone;
+	snap = list_head(&ddpa->shared_snaps);
+	origin_ds = snap->ds;
 
 	if (hds->ds_phys->ds_flags & DS_FLAG_NOPROMOTE) {
+		promote_rele(ddpa, FTAG);
+		return (SET_ERROR(EXDEV));
+	}
+
+	/*
+	 * Can't promote across the MOOCH_BYTESWAP boundary.
+	 */
+	if (hds->ds_mooch_byteswap != origin_ds->ds_mooch_byteswap) {
 		promote_rele(ddpa, FTAG);
 		return (SET_ERROR(EXDEV));
 	}
@@ -2028,9 +2061,6 @@ dsl_dataset_promote_check(void *arg, dmu_tx_t *tx)
 		promote_rele(ddpa, FTAG);
 		return (0);
 	}
-
-	snap = list_head(&ddpa->shared_snaps);
-	origin_ds = snap->ds;
 
 	/* compute origin's new unique space */
 	snap = list_tail(&ddpa->clone_snaps);
@@ -2563,6 +2593,9 @@ dsl_dataset_clone_swap_sync_impl(dsl_dataset_t *clone,
 	ASSERT(origin_head->ds_quota == 0 ||
 	    clone->ds_phys->ds_unique_bytes <= origin_head->ds_quota);
 	ASSERT3P(clone->ds_prev, ==, origin_head->ds_prev);
+
+	/* can't swap across the MOOCH_BYTESWAP boundary */
+	ASSERT3U(clone->ds_mooch_byteswap, ==, origin_head->ds_mooch_byteswap);
 
 	dmu_buf_will_dirty(clone->ds_dbuf, tx);
 	dmu_buf_will_dirty(origin_head->ds_dbuf, tx);
@@ -3107,6 +3140,67 @@ dsl_dataset_space_wouldfree(dsl_dataset_t *firstsnap,
 		dsl_dataset_rele(ds, FTAG);
 	}
 	return (err);
+}
+
+static int
+dsl_dataset_activate_mooch_byteswap_check(void *arg, dmu_tx_t *tx)
+{
+	dsl_dataset_t *ds = arg;
+	dsl_pool_t *dp = dmu_tx_pool(tx);
+
+	if (!spa_feature_is_enabled(dp->dp_spa, SPA_FEATURE_MOOCH_BYTESWAP))
+		return (SET_ERROR(ENOTSUP));
+
+	ASSERT(spa_feature_is_enabled(dp->dp_spa,
+	    SPA_FEATURE_EXTENSIBLE_DATASET));
+
+	if (ds->ds_mooch_byteswap)
+		return (EALREADY);
+	return (0);
+}
+
+void
+dsl_dataset_activate_mooch_byteswap_sync_impl(uint64_t dsobj, dmu_tx_t *tx)
+{
+	spa_t *spa = dmu_tx_pool(tx)->dp_spa;
+	objset_t *mos = dmu_tx_pool(tx)->dp_meta_objset;
+	uint64_t zero = 0;
+
+	spa_feature_incr(spa, SPA_FEATURE_MOOCH_BYTESWAP, tx);
+	dmu_object_zapify(mos, dsobj, DMU_OT_DSL_DATASET, tx);
+
+	VERIFY0(zap_add(mos, dsobj, DS_FIELD_MOOCH_BYTESWAP,
+	    sizeof (zero), 1, &zero, tx));
+}
+
+static void
+dsl_dataset_activate_mooch_byteswap_sync(void *arg, dmu_tx_t *tx)
+{
+	dsl_dataset_t *ds = arg;
+
+	dsl_dataset_activate_mooch_byteswap_sync_impl(ds->ds_object, tx);
+	ASSERT(!ds->ds_mooch_byteswap);
+	ds->ds_mooch_byteswap = B_TRUE;
+}
+
+/*
+ * The objset must be long-held, because this will do a synctask
+ */
+int
+dsl_dataset_activate_mooch_byteswap(objset_t *os)
+{
+	int error;
+
+	error = dsl_sync_task(spa_name(dmu_objset_spa(os)),
+	    dsl_dataset_activate_mooch_byteswap_check,
+	    dsl_dataset_activate_mooch_byteswap_sync, os->os_dsl_dataset, 1);
+
+	/*
+	 * EALREADY here indicates that this dataset is already mooching.
+	 */
+	if (error == EALREADY)
+		error = 0;
+	return (error);
 }
 
 /*

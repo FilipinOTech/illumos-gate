@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2013, 2014 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -58,6 +58,7 @@ typedef struct traverse_data {
 	zbookmark_t *td_resume;
 	int td_flags;
 	prefetch_data_t *td_pfd;
+	boolean_t td_paused;
 	blkptr_cb_t *td_func;
 	void *td_arg;
 } traverse_data_t;
@@ -205,6 +206,16 @@ traverse_prefetch_metadata(traverse_data_t *td,
 	    ZIO_PRIORITY_ASYNC_READ, ZIO_FLAG_CANFAIL, &flags, zb);
 }
 
+static boolean_t
+prefetch_needed(prefetch_data_t *pfd, const blkptr_t *bp)
+{
+	ASSERT(pfd->pd_flags & TRAVERSE_PREFETCH_DATA);
+	if (BP_IS_HOLE(bp) || BP_IS_EMBEDDED(bp) ||
+	    BP_GET_TYPE(bp) == DMU_OT_INTENT_LOG)
+		return (B_FALSE);
+	return (B_TRUE);
+}
+
 static int
 traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
     const blkptr_t *bp, const zbookmark_t *zb)
@@ -251,13 +262,8 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
 		return (0);
 	}
 
-	if (BP_IS_HOLE(bp)) {
-		err = td->td_func(td->td_spa, NULL, bp, zb, dnp, td->td_arg);
-		return (err);
-	}
-
-	if (pd && !pd->pd_exited &&
-	    ((pd->pd_flags & TRAVERSE_PREFETCH_DATA) ||
+		if (pd && !pd->pd_exited &&
+	    (prefetch_needed(pd, bp) || (pd->pd_flags & TRAVERSE_PREFETCH_DATA) ||
 	    BP_GET_TYPE(bp) == DMU_OT_DNODE || BP_GET_LEVEL(bp) > 0)) {
 		mutex_enter(&pd->pd_mtx);
 		ASSERT(pd->pd_blks_fetched >= 0);
@@ -266,6 +272,13 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
 		pd->pd_blks_fetched--;
 		cv_broadcast(&pd->pd_cv);
 		mutex_exit(&pd->pd_mtx);
+	}
+
+	if (BP_IS_HOLE(bp)) {
+		err = td->td_func(td->td_spa, NULL, bp, zb, dnp, td->td_arg);
+		if (err != 0)
+			goto post;
+		return (0);
 	}
 
 	if (td->td_flags & TRAVERSE_PRE) {
@@ -288,7 +301,7 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
 		err = arc_read(NULL, td->td_spa, bp, arc_getbuf_func, &buf,
 		    ZIO_PRIORITY_ASYNC_READ, ZIO_FLAG_CANFAIL, &flags, zb);
 		if (err != 0)
-			return (err);
+			goto post;
 		cbp = buf->b_data;
 
 		for (i = 0; i < epb; i++) {
@@ -318,7 +331,7 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
 		err = arc_read(NULL, td->td_spa, bp, arc_getbuf_func, &buf,
 		    ZIO_PRIORITY_ASYNC_READ, ZIO_FLAG_CANFAIL, &flags, zb);
 		if (err != 0)
-			return (err);
+			goto post;
 		dnp = buf->b_data;
 
 		for (i = 0; i < epb; i++) {
@@ -344,7 +357,7 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
 		err = arc_read(NULL, td->td_spa, bp, arc_getbuf_func, &buf,
 		    ZIO_PRIORITY_ASYNC_READ, ZIO_FLAG_CANFAIL, &flags, zb);
 		if (err != 0)
-			return (err);
+			goto post;
 
 		osp = buf->b_data;
 		dnp = &osp->os_meta_dnode;
@@ -388,11 +401,36 @@ post:
 		if (err == ERESTART)
 			pause = B_TRUE;
 	}
-
 	if (pause && td->td_resume != NULL) {
 		ASSERT3U(err, ==, ERESTART);
 		ASSERT(!hard);
 		traverse_pause(td, zb);
+	}
+
+	if (hard && (err == EIO || err == ECKSUM)) {
+		/*
+		 * Ignore this disk error as requested by the HARD flag,
+		 * and continue traversal.
+		 */
+		err = 0;
+	}
+	/*
+	 * If we are stopping here, set td_resume.
+	 */
+	if (td->td_resume != NULL && err != 0 && !td->td_paused) {
+		td->td_resume->zb_objset = zb->zb_objset;
+		td->td_resume->zb_object = zb->zb_object;
+		td->td_resume->zb_level = 0;
+		/*
+		 * If we have stopped on an indirect block (e.g. due to
+		 * i/o error), we have not visited anything below it.
+		 * Set the bookmark to the first level-0 block that we need
+		 * to visit.  This way, the resuming code does not need to
+		 * deal with resuming from indirect blocks.
+		 */
+		td->td_resume->zb_blkid = zb->zb_blkid <<
+		    (zb->zb_level * (dnp->dn_indblkshift - SPA_BLKPTRSHIFT));
+		td->td_paused = B_TRUE;
 	}
 
 	return (err != 0 ? err : lasterr);
@@ -458,10 +496,10 @@ traverse_prefetcher(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	if (pfd->pd_cancel)
 		return (SET_ERROR(EINTR));
 
-	if (BP_IS_HOLE(bp) ||
+	if (!prefetch_needed(pfd, bp) || (BP_IS_HOLE(bp) ||
 	    !((pfd->pd_flags & TRAVERSE_PREFETCH_DATA) ||
 	    BP_GET_TYPE(bp) == DMU_OT_DNODE || BP_GET_LEVEL(bp) > 0) ||
-	    BP_GET_TYPE(bp) == DMU_OT_INTENT_LOG)
+	    BP_GET_TYPE(bp) == DMU_OT_INTENT_LOG))
 		return (0);
 
 	mutex_enter(&pfd->pd_mtx);
@@ -530,6 +568,7 @@ traverse_impl(spa_t *spa, dsl_dataset_t *ds, uint64_t objset, blkptr_t *rootbp,
 	td.td_arg = arg;
 	td.td_pfd = &pd;
 	td.td_flags = flags;
+	td.td_paused = B_FALSE;
 
 	pd.pd_blks_max = zfs_pd_blks_max;
 	pd.pd_flags = flags;

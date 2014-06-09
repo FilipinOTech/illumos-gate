@@ -264,6 +264,11 @@ dsl_destroy_snapshot_sync_impl(dsl_dataset_t *ds, boolean_t defer, dmu_tx_t *tx)
 
 	obj = ds->ds_object;
 
+	if (ds->ds_mooch_byteswap) {
+		ASSERT0(zap_contains(mos, obj, DS_FIELD_MOOCH_BYTESWAP));
+		spa_feature_decr(dp->dp_spa, SPA_FEATURE_MOOCH_BYTESWAP, tx);
+	}
+
 	if (ds->ds_phys->ds_prev_snap_obj != 0) {
 		ASSERT3P(ds->ds_prev, ==, NULL);
 		VERIFY0(dsl_dataset_hold_obj(dp,
@@ -539,7 +544,7 @@ kill_blkptr(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	struct killarg *ka = arg;
 	dmu_tx_t *tx = ka->tx;
 
-	if (BP_IS_HOLE(bp))
+	if (BP_IS_HOLE(bp) || BP_IS_EMBEDDED(bp))
 		return (0);
 
 	if (zb->zb_level == ZB_ZIL_LEVEL) {
@@ -589,6 +594,7 @@ dsl_destroy_head_check_impl(dsl_dataset_t *ds, int expected_holds)
 	uint64_t count;
 	objset_t *mos;
 
+	ASSERT(!dsl_dataset_is_snapshot(ds));
 	if (dsl_dataset_is_snapshot(ds))
 		return (SET_ERROR(EINVAL));
 
@@ -711,13 +717,16 @@ dsl_destroy_head_sync_impl(dsl_dataset_t *ds, dmu_tx_t *tx)
 	    ds->ds_prev->ds_phys->ds_num_children == 2 &&
 	    ds->ds_prev->ds_userrefs == 0);
 
-	/* Remove our reservation */
+	/* Remove our reservation. */
 	if (ds->ds_reserved != 0) {
 		dsl_dataset_set_refreservation_sync_impl(ds,
 		    (ZPROP_SRC_NONE | ZPROP_SRC_LOCAL | ZPROP_SRC_RECEIVED),
 		    0, tx);
 		ASSERT0(ds->ds_reserved);
 	}
+
+	if (ds->ds_mooch_byteswap)
+		spa_feature_decr(dp->dp_spa, SPA_FEATURE_MOOCH_BYTESWAP, tx);
 
 	dsl_scan_ds_destroyed(ds, tx);
 

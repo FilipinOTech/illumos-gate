@@ -23,11 +23,12 @@
  * Copyright 1999-2003 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright (c) 2013 by Delphix. All rights reserved.
+ */
 
 #ifndef	_DHCPAGENT_UTIL_H
 #define	_DHCPAGENT_UTIL_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/types.h>
 #include <dhcpagent_ipc.h>
@@ -43,7 +44,6 @@ extern "C" {
 
 extern const char	*dhcp_state_to_string(DHCPSTATE);
 extern dhcp_ipc_type_t  dhcp_string_to_request(const char *);
-extern int		dhcp_start_agent(int);
 extern const char	*dhcp_status_hdr_string(void);
 extern const char	*dhcp_status_reply_to_string(dhcp_ipc_reply_t *);
 

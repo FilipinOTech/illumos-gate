@@ -110,6 +110,8 @@ SYMBOL_VERSION ILLUMOS_0.5 {	# common C++ ABI exit handlers
     protected:
 	__cxa_atexit;
 	__cxa_finalize;
+    global:
+        aok;
 } ILLUMOS_0.4;
 
 SYMBOL_VERSION ILLUMOS_0.4 {	# Illumos additions
@@ -2955,6 +2957,7 @@ $endif
 	zone_enter;
 	zone_getattr;
 	zone_get_id;
+	zone_get_zoneids;
 	zone_list;
 	zone_list_datalink;
 	zonept;

@@ -52,7 +52,7 @@
  *     At random times, the child self-immolates with a SIGKILL.
  *     This is the software equivalent of pulling the power cord.
  *     The parent then runs the test again, using the existing
- *     storage pool, as many times as desired. If backwards compatability
+ *     storage pool, as many times as desired. If backwards compatibility
  *     testing is enabled ztest will sometimes run the "older" version
  *     of ztest after a SIGKILL.
  *
@@ -170,7 +170,7 @@ static const ztest_shared_opts_t ztest_opts_defaults = {
 	.zo_mirrors = 2,
 	.zo_raidz = 4,
 	.zo_raidz_parity = 1,
-	.zo_vdev_size = SPA_MINDEVSIZE,
+	.zo_vdev_size = SPA_MINDEVSIZE * 2,
 	.zo_datasets = 7,
 	.zo_threads = 23,
 	.zo_passtime = 60,		/* 60 seconds */
@@ -185,6 +185,7 @@ static const ztest_shared_opts_t ztest_opts_defaults = {
 extern uint64_t metaslab_gang_bang;
 extern uint64_t metaslab_df_alloc_threshold;
 extern uint64_t zfs_deadman_synctime_ms;
+extern int metaslab_preload_limit;
 
 static ztest_shared_opts_t *ztest_shared_opts;
 static ztest_shared_opts_t ztest_opts;
@@ -334,6 +335,7 @@ ztest_func_t ztest_vdev_aux_add_remove;
 ztest_func_t ztest_split_pool;
 ztest_func_t ztest_reguid;
 ztest_func_t ztest_spa_upgrade;
+ztest_func_t ztest_mooch_byteswap;
 
 uint64_t zopt_always = 0ULL * NANOSEC;		/* all the time */
 uint64_t zopt_incessant = 1ULL * NANOSEC / 10;	/* every 1/10 second */
@@ -375,6 +377,7 @@ ztest_info_t ztest_info[] = {
 	    &ztest_opts.zo_vdevtime				},
 	{ ztest_vdev_aux_add_remove,		1,
 	    &ztest_opts.zo_vdevtime				},
+	{ ztest_mooch_byteswap,			1,	&zopt_sometimes	},
 };
 
 #define	ZTEST_FUNCS	(sizeof (ztest_info) / sizeof (ztest_info_t))
@@ -440,6 +443,11 @@ enum ztest_object {
 	ZTEST_DIROBJ,
 	ZTEST_OBJECTS
 };
+
+/*
+ * Name of entry in ZTEST_DIROBJ that maps the origin objects referenced.
+ */
+#define	ZTEST_MOOCH_BYTESWAP_MAP "ZTEST_MOOCH_BYTESWAP_MAP"
 
 static void usage(boolean_t) __NORETURN;
 
@@ -807,7 +815,7 @@ static uint64_t
 ztest_get_ashift(void)
 {
 	if (ztest_opts.zo_ashift == 0)
-		return (SPA_MINBLOCKSHIFT + ztest_random(3));
+		return (SPA_MINBLOCKSHIFT + ztest_random(5));
 	return (ztest_opts.zo_ashift);
 }
 
@@ -966,11 +974,28 @@ ztest_random_spa_version(uint64_t initial_version)
 	return (version);
 }
 
+/*
+ * Find the largest ashift used
+ */
+static uint64_t
+ztest_spa_get_ashift() {
+	uint64_t i;
+	uint64_t ashift = SPA_MINBLOCKSHIFT;
+	vdev_t *rvd = ztest_spa->spa_root_vdev;
+
+	for (i = 0; i < rvd->vdev_children; i++) {
+		ashift = MAX(ashift, rvd->vdev_child[i]->vdev_ashift);
+	}
+	return ashift;
+}
+
 static int
 ztest_random_blocksize(void)
 {
-	return (1 << (SPA_MINBLOCKSHIFT +
-	    ztest_random(SPA_MAXBLOCKSHIFT - SPA_MINBLOCKSHIFT + 1)));
+	// Choose a block size >= the ashift.
+	uint64_t block_shift =
+	    ztest_random(SPA_MAXBLOCKSHIFT - ztest_spa_get_ashift() + 1);
+	return (1 << (SPA_MINBLOCKSHIFT + block_shift));
 }
 
 static int
@@ -1265,13 +1290,13 @@ static void
 ztest_bt_verify(ztest_block_tag_t *bt, objset_t *os, uint64_t object,
     uint64_t offset, uint64_t gen, uint64_t txg, uint64_t crtxg)
 {
-	ASSERT(bt->bt_magic == BT_MAGIC);
-	ASSERT(bt->bt_objset == dmu_objset_id(os));
-	ASSERT(bt->bt_object == object);
-	ASSERT(bt->bt_offset == offset);
-	ASSERT(bt->bt_gen <= gen);
-	ASSERT(bt->bt_txg <= txg);
-	ASSERT(bt->bt_crtxg == crtxg);
+	ASSERT3U(bt->bt_magic, ==, BT_MAGIC);
+	ASSERT3U(bt->bt_objset, ==, dmu_objset_id(os));
+	ASSERT3U(bt->bt_object, ==, object);
+	ASSERT3U(bt->bt_offset, ==, offset);
+	ASSERT3U(bt->bt_gen, <=, gen);
+	ASSERT3U(bt->bt_txg, <=, txg);
+	ASSERT3U(bt->bt_crtxg, ==, crtxg);
 }
 
 static ztest_block_tag_t *
@@ -3205,7 +3230,7 @@ ztest_objset_destroy_cb(const char *name, void *arg)
 	 * Destroy the dataset.
 	 */
 	if (strchr(name, '@') != NULL) {
-		VERIFY0(dsl_destroy_snapshot(name, B_FALSE));
+		VERIFY0(dsl_destroy_snapshot(name, B_TRUE));
 	} else {
 		VERIFY0(dsl_destroy_head(name));
 	}
@@ -3470,6 +3495,11 @@ ztest_dsl_dataset_promote_busy(ztest_ds_t *zd, uint64_t id)
 	if (error)
 		fatal(0, "dmu_objset_own(%s) = %d", snap2name, error);
 	error = dsl_dataset_promote(clone2name, NULL);
+	if (error == ENOSPC) {
+		dmu_objset_disown(os, FTAG);
+		ztest_record_enospc(FTAG);
+		goto out;
+	}
 	if (error != EBUSY)
 		fatal(0, "dsl_dataset_promote(%s), %d, not EBUSY", clone2name,
 		    error);
@@ -3477,6 +3507,251 @@ ztest_dsl_dataset_promote_busy(ztest_ds_t *zd, uint64_t id)
 
 out:
 	ztest_dsl_dataset_cleanup(osname, id);
+
+	(void) rw_unlock(&ztest_name_lock);
+}
+
+static int
+ztest_get_mooch_obj_refd(objset_t *os, uint64_t obj, uint64_t *objp)
+{
+	uint64_t moochobj;
+	if (obj == ZTEST_DIROBJ)
+		return (ENOENT);
+	int error = zap_lookup(os, ZTEST_DIROBJ, ZTEST_MOOCH_BYTESWAP_MAP,
+	    sizeof (moochobj), 1, &moochobj);
+	if (error != 0)
+		return (error);
+	if (obj == moochobj)
+		return (ENOENT);
+	return (zap_lookup_int_key(os, moochobj, obj, objp));
+
+}
+
+void
+ztest_mooch_byteswap(ztest_ds_t *zd, uint64_t id)
+{
+	objset_t *clone_os = NULL;
+	objset_t *snap_os = NULL;
+	char snap1name[MAXNAMELEN];
+	char clone1name[MAXNAMELEN];
+	char *osname = zd->zd_name;
+	int error;
+	ztest_od_t od;
+	dmu_tx_t *tx;
+
+	(void) rw_rdlock(&ztest_name_lock);
+	(void) snprintf(snap1name, MAXNAMELEN, "%s@s1_%llu", osname, id);
+	(void) snprintf(clone1name, MAXNAMELEN, "%s/c1_%llu", osname, id);
+	ztest_dsl_dataset_cleanup(osname, id);
+	(void) rw_unlock(&ztest_name_lock);
+
+	/*
+	 * Write data to os.
+	 */
+	/*
+	 * Select a blocksize between 2k and 32k.  Smaller blocksizes
+	 * have so much metadata that we can't count on a decent (90%) space
+	 * savings due to byteswap mooching.  Larger blocksizes need so many
+	 * SKIP records that we can't fit the byteswap records in the blkptr.
+	 */
+	int bs = 1 << (ztest_random(5) + 11);
+	ztest_od_init(&od, id, FTAG, 0, DMU_OT_PLAIN_OTHER, bs, 0);
+	if (ztest_object_init(zd, &od, sizeof (od), B_FALSE) != 0)
+		return;
+	/*
+	 * We may reuse an old file which doesn't have the blocksize we
+	 * requested, so get the actual blocksize.
+	 */
+	dmu_object_info_t doi;
+	VERIFY0(dmu_object_info(zd->zd_os, od.od_object, &doi));
+	bs = doi.doi_data_block_size;
+
+	for (int blkid = 0; blkid < 1000; blkid++) {
+		uint64_t buf[SPA_MAXBLOCKSIZE / sizeof (uint64_t)];
+
+		ASSERT3U(sizeof (buf), >=, bs);
+		/*
+		 * Fill buf with random data.
+		 */
+		for (int i = 0; i < bs / sizeof (*buf); i++)
+			buf[i] = ztest_random(ztest_random(UINT64_MAX));
+
+		(void) rw_rdlock(&zd->zd_zilog_lock);
+		error = ztest_write(zd, od.od_object, blkid * bs, bs, buf);
+		(void) rw_unlock(&zd->zd_zilog_lock);
+		if (error == ENOSPC) {
+			ztest_record_enospc(FTAG);
+			goto out;
+		} else if (error != 0) {
+			fatal(0, "ztest_write() = %d", error);
+		}
+	}
+
+	/*
+	 * Create snapshot & clone.
+	 */
+
+	(void) rw_rdlock(&ztest_name_lock);
+
+	error = dmu_objset_snapshot_one(osname, strchr(snap1name, '@') + 1);
+	if (error && error != EEXIST) {
+		if (error == ENOSPC) {
+			ztest_record_enospc(FTAG);
+			goto out;
+		}
+		fatal(0, "dmu_take_snapshot(%s) = %d", snap1name, error);
+	}
+
+	error = dmu_objset_clone(clone1name, snap1name);
+	if (error) {
+		if (error == ENOSPC) {
+			ztest_record_enospc(FTAG);
+			goto out;
+		}
+		fatal(0, "dmu_objset_create(%s) = %d", clone1name, error);
+	}
+
+	error = dmu_objset_own(clone1name, DMU_OST_OTHER,
+	    B_FALSE, FTAG, &clone_os);
+	if (error) {
+		fatal(0, "dmu_objset_own(%s) = %d",
+		    clone1name, error);
+	}
+
+	error = dmu_objset_own(snap1name, DMU_OST_OTHER,
+	    B_TRUE, FTAG, &snap_os);
+	if (error) {
+		fatal(0, "dmu_objset_own(%s) = %d",
+		    snap1name, error);
+	}
+
+	/*
+	 * Set up mooch map object.
+	 */
+	tx = dmu_tx_create(clone_os);
+	dmu_tx_hold_zap(tx, ZTEST_DIROBJ, B_TRUE,
+	    ZTEST_MOOCH_BYTESWAP_MAP);
+	dmu_tx_hold_zap(tx, DMU_NEW_OBJECT, B_TRUE, NULL);
+	error = dmu_tx_assign(tx, TXG_WAIT);
+	if (error == ENOSPC) {
+		dmu_tx_abort(tx);
+		ztest_record_enospc(FTAG);
+		goto out;
+	}
+	ASSERT0(error);
+
+	uint64_t moochmap = zap_create(clone_os,
+	    DMU_OTN_ZAP_METADATA, DMU_OT_NONE, 0, tx);
+	VERIFY0(zap_add(clone_os, ZTEST_DIROBJ, ZTEST_MOOCH_BYTESWAP_MAP,
+	    8, 1, &moochmap, tx));
+	dmu_tx_commit(tx);
+
+	error = dsl_dataset_activate_mooch_byteswap(clone_os);
+	if (error == ENOSPC) {
+		ztest_record_enospc(FTAG);
+		goto out;
+	}
+	ASSERT0(error);
+
+	/*
+	 * Create mooching file and set mooch association.
+	 */
+	tx = dmu_tx_create(clone_os);
+	dmu_tx_hold_bonus(tx, DMU_NEW_OBJECT);
+	dmu_tx_hold_zap(tx, moochmap, B_TRUE, NULL);
+	error = dmu_tx_assign(tx, TXG_WAIT);
+	if (error == ENOSPC) {
+		dmu_tx_abort(tx);
+		ztest_record_enospc(FTAG);
+		goto out;
+	}
+	ASSERT0(error);
+	uint64_t moochobj = dmu_object_alloc(clone_os, DMU_OT_PLAIN_OTHER,
+	    bs, DMU_OT_NONE, 0, tx);
+	VERIFY0(zap_add_int_key(clone_os, moochmap,
+	    moochobj, od.od_object, tx));
+	dmu_tx_commit(tx);
+	dmu_object_refresh_mooch_obj(clone_os, moochobj);
+
+	/*
+	 * Write byteswapped data.
+	 */
+	for (int blkid = 0; blkid < 1000; blkid++) {
+		char buf[SPA_MAXBLOCKSIZE];
+
+		/* read origin object */
+		VERIFY0(dmu_read(snap_os, od.od_object,
+		    blkid * bs, bs, buf, 0));
+
+		/* swap some bytes */
+		for (int off = 0; off < bs; off += ztest_random(bs/10)) {
+			int swapsz = 1 << (ztest_random(3) + 1);
+			int run = ztest_random(5);
+			if (off + swapsz * run > bs)
+				break;
+
+#define	SWAPBYTES(a, b) { \
+	char tmp = *(a); \
+	*(a) = *(b); \
+	*(b) = tmp; \
+}
+
+			for (int i = 0; i < run; i++) {
+				switch (swapsz) {
+				case 2: {
+					SWAPBYTES(&buf[off + 0], &buf[off + 1]);
+					break;
+				}
+				case 4: {
+					SWAPBYTES(&buf[off + 0], &buf[off + 3]);
+					SWAPBYTES(&buf[off + 1], &buf[off + 2]);
+					break;
+				}
+				case 8: {
+					SWAPBYTES(&buf[off + 0], &buf[off + 7]);
+					SWAPBYTES(&buf[off + 1], &buf[off + 6]);
+					SWAPBYTES(&buf[off + 2], &buf[off + 5]);
+					SWAPBYTES(&buf[off + 3], &buf[off + 4]);
+					break;
+				}
+				}
+				off += swapsz;
+			}
+#undef SWAPBYTES
+		}
+
+
+		/* write to mooching object */
+		dmu_tx_t *tx = dmu_tx_create(clone_os);
+
+		dmu_tx_hold_write(tx, moochobj, blkid * bs, bs);
+		error = dmu_tx_assign(tx, TXG_WAIT);
+		if (error == ENOSPC) {
+			dmu_tx_abort(tx);
+			ztest_record_enospc(FTAG);
+			goto out;
+		} else if (error != 0) {
+			fatal(0, "ztest_write() = %d", error);
+		}
+		dmu_write(clone_os, moochobj, blkid * bs, bs, buf, tx);
+		dmu_tx_commit(tx);
+	}
+
+	/*
+	 * Verify that mooching file is < 20% the size of the old file.
+	 */
+	txg_wait_synced(dmu_objset_pool(zd->zd_os), 0);
+	dmu_object_info_t mdoi;
+	VERIFY0(dmu_object_info(zd->zd_os, od.od_object, &doi));
+	VERIFY0(dmu_object_info(clone_os, moochobj, &mdoi));
+	VERIFY3U(mdoi.doi_physical_blocks_512, <,
+	    doi.doi_physical_blocks_512 / 5);
+
+out:
+	if (clone_os != NULL)
+		dmu_objset_disown(clone_os, FTAG);
+	if (snap_os != NULL)
+		dmu_objset_disown(snap_os, FTAG);
 
 	(void) rw_unlock(&ztest_name_lock);
 }
@@ -3625,11 +3900,19 @@ ztest_dmu_read_write(ztest_ds_t *zd, uint64_t id)
 		return;
 	}
 
-	dmu_object_set_checksum(os, bigobj,
-	    (enum zio_checksum)ztest_random_dsl_prop(ZFS_PROP_CHECKSUM), tx);
+	enum zio_checksum cksum;
+	do {
+		cksum = (enum zio_checksum)
+		    ztest_random_dsl_prop(ZFS_PROP_CHECKSUM);
+	} while (cksum >= ZIO_CHECKSUM_LEGACY_FUNCTIONS);
+	dmu_object_set_checksum(os, bigobj, cksum, tx);
 
-	dmu_object_set_compress(os, bigobj,
-	    (enum zio_compress)ztest_random_dsl_prop(ZFS_PROP_COMPRESSION), tx);
+	enum zio_compress comp;
+	do {
+		comp = (enum zio_compress)
+		    ztest_random_dsl_prop(ZFS_PROP_COMPRESSION);
+	} while (comp >= ZIO_COMPRESS_LEGACY_FUNCTIONS);
+	dmu_object_set_compress(os, bigobj, comp, tx);
 
 	/*
 	 * For each index from n to n + s, verify that the existing bufwad
@@ -4709,8 +4992,13 @@ ztest_dmu_snapshot_hold(ztest_ds_t *zd, uint64_t id)
 	error = dsl_dataset_user_hold(holds, 0, NULL);
 	fnvlist_free(holds);
 
-	if (error)
-		fatal(0, "dsl_dataset_user_hold(%s)", fullname, tag);
+	if (error == ENOSPC) {
+		ztest_record_enospc("dsl_dataset_user_hold");
+		goto out;
+	} else if (error) {
+		fatal(0, "dsl_dataset_user_hold(%s, %s) = %u",
+		    fullname, tag, error);
+	}
 
 	error = dsl_destroy_snapshot(fullname, B_FALSE);
 	if (error != EBUSY) {
@@ -5163,7 +5451,7 @@ ztest_run_zdb(char *pool)
 	isa = strdup(isa);
 	/* LINTED */
 	(void) sprintf(bin,
-	    "/usr/sbin%.*s/zdb -bcc%s%s -U %s %s",
+	    "/usr/sbin%.*s/zdb -bcc%s%s -d -U %s %s",
 	    isalen,
 	    isa,
 	    ztest_opts.zo_verbose >= 3 ? "s" : "",
@@ -5573,8 +5861,13 @@ ztest_run(ztest_shared_t *zs)
 	 * Open our pool.
 	 */
 	kernel_init(FREAD | FWRITE);
+
+	dmu_objset_register_type(DMU_OST_OTHER,
+	    NULL, ztest_get_mooch_obj_refd);
+
 	VERIFY0(spa_open(ztest_opts.zo_pool, &spa, FTAG));
 	spa->spa_debug = B_TRUE;
+	metaslab_preload_limit = ztest_random(20) + 1;
 	ztest_spa = spa;
 
 	VERIFY0(dmu_objset_own(ztest_opts.zo_pool,
@@ -5745,16 +6038,30 @@ ztest_freeze(void)
 	spa_freeze(spa);
 
 	/*
+	 * Because it is hard to predict how much space a write will actually
+	 * require beforehand, we leave ourselves some fudge space to write over
+	 * capacity.
+	 */
+	uint64_t capacity = metaslab_class_get_space(spa_normal_class(spa)) / 2;
+
+	/*
 	 * Run tests that generate log records but don't alter the pool config
 	 * or depend on DSL sync tasks (snapshots, objset create/destroy, etc).
 	 * We do a txg_wait_synced() after each iteration to force the txg
 	 * to increase well beyond the last synced value in the uberblock.
 	 * The ZIL should be OK with that.
+	 *
+	 * Run a random number of times less than zo_maxloops and ensure we do
+	 * not run out of space on the pool.
 	 */
 	while (ztest_random(10) != 0 &&
-	    numloops++ < ztest_opts.zo_maxloops) {
-		ztest_dmu_write_parallel(zd, 0);
-		ztest_dmu_object_alloc_free(zd, 0);
+	    numloops++ < ztest_opts.zo_maxloops &&
+	    metaslab_class_get_alloc(spa_normal_class(spa)) < capacity) {
+		ztest_od_t od;
+		ztest_od_init(&od, 0, FTAG, 0, DMU_OT_UINT64_OTHER, 0, 0);
+		VERIFY0(ztest_object_init(zd, &od, sizeof (od), B_FALSE));
+		ztest_io(zd, od.od_object,
+		    ztest_random(ZTEST_RANGE_LOCKS) << SPA_MAXBLOCKSHIFT);
 		txg_wait_synced(spa_get_dsl(spa), 0);
 	}
 

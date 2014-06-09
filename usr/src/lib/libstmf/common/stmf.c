@@ -21,6 +21,7 @@
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
 #include <stdlib.h>
@@ -136,7 +137,6 @@ static int modifyDiskLuProp(stmfGuid *, const char *, uint32_t, const char *);
 static int validateModifyDiskProp(uint32_t);
 static uint8_t iGetPersistMethod();
 static int groupListIoctl(stmfGroupList **, int);
-static int iLoadGroupFromPs(stmfGroupList **, int);
 static int groupMemberListIoctl(stmfGroupName *, stmfGroupProperties **, int);
 static int getProviderData(char *, nvlist_t **, int, uint64_t *);
 static int setDiskStandby(stmfGuid *luGuid);
@@ -435,7 +435,6 @@ done:
 static int
 viewEntryCompare(const void *p1, const void *p2)
 {
-
 	stmfViewEntry *v1 = (stmfViewEntry *)p1, *v2 = (stmfViewEntry *)p2;
 	if (v1->veIndex > v2->veIndex)
 		return (1);
@@ -453,7 +452,6 @@ viewEntryCompare(const void *p1, const void *p2)
 static int
 guidCompare(const void *p1, const void *p2)
 {
-
 	stmfGuid *g1 = (stmfGuid *)p1, *g2 = (stmfGuid *)p2;
 	int i;
 
@@ -478,6 +476,7 @@ guidCompare(const void *p1, const void *p2)
 int
 stmfAddToHostGroup(stmfGroupName *hostGroupName, stmfDevid *hostName)
 {
+	char *hostid = NULL;
 	int ret;
 	int fd;
 
@@ -508,36 +507,18 @@ stmfAddToHostGroup(stmfGroupName *hostGroupName, stmfDevid *hostName)
 		goto done;
 	}
 
-	ret = psAddHostGroupMember((char *)hostGroupName,
-	    (char *)hostName->ident);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_EXISTS:
-			ret = STMF_ERROR_EXISTS;
-			break;
-		case STMF_PS_ERROR_GROUP_NOT_FOUND:
-			ret = STMF_ERROR_GROUP_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfAddToHostGroup:psAddHostGroupMember:error(%d)",
-			    ret);
-			ret = STMF_STATUS_ERROR;
-			break;
+	if ((hostid = calloc(1, hostName->identLength + 1)) == NULL) {
+		ret = STMF_ERROR_NOMEM;
+		goto done;
 	}
 
+	bcopy(hostName->ident, hostid, hostName->identLength);
+	hostid[hostName->identLength] = '\0';
+
+	ret = psAddHostGroupMember((char *)hostGroupName, hostid);
+
 done:
+	free(hostid);
 	(void) close(fd);
 	return (ret);
 }
@@ -553,6 +534,7 @@ done:
 int
 stmfAddToTargetGroup(stmfGroupName *targetGroupName, stmfDevid *targetName)
 {
+	char *targetid = NULL;
 	int ret;
 	int fd;
 
@@ -583,36 +565,18 @@ stmfAddToTargetGroup(stmfGroupName *targetGroupName, stmfDevid *targetName)
 		goto done;
 	}
 
-	ret = psAddTargetGroupMember((char *)targetGroupName,
-	    (char *)targetName->ident);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_EXISTS:
-			ret = STMF_ERROR_EXISTS;
-			break;
-		case STMF_PS_ERROR_GROUP_NOT_FOUND:
-			ret = STMF_ERROR_GROUP_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfAddToTargetGroup:psAddTargetGroupMember:"
-			    "error(%d)", ret);
-			ret = STMF_STATUS_ERROR;
-			break;
+	if ((targetid = calloc(1, targetName->identLength + 1)) == NULL) {
+		ret = STMF_ERROR_NOMEM;
+		goto done;
 	}
 
+	bcopy(targetName->ident, targetid, targetName->identLength);
+	targetid[targetName->identLength] = '\0';
+
+	ret = psAddTargetGroupMember((char *)targetGroupName, targetid);
+
 done:
+	free(targetid);
 	(void) close(fd);
 	return (ret);
 }
@@ -814,28 +778,6 @@ stmfAddViewEntry(stmfGuid *lu, stmfViewEntry *viewEntry)
 	 * store.
 	 */
 	ret = psAddViewEntry(lu, &iViewEntry);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_NOT_FOUND:
-			ret = STMF_ERROR_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfAddViewEntry:psAddViewEntry:error(%d)", ret);
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
 
 done:
 	(void) close(fd);
@@ -939,29 +881,6 @@ stmfClearProviderData(char *providerName, int providerType)
 	}
 
 	ret = psClearProviderData(providerName, providerType);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_NOT_FOUND:
-			ret = STMF_ERROR_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfClearProviderData:psClearProviderData"
-			    ":error(%d)", ret);
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
 
 done:
 	(void) close(fd);
@@ -1014,29 +933,6 @@ stmfCreateHostGroup(stmfGroupName *hostGroupName)
 	}
 
 	ret = psCreateHostGroup((char *)hostGroupName);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_EXISTS:
-			ret = STMF_ERROR_EXISTS;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfCreateHostGroup:psCreateHostGroup:error(%d)",
-			    ret);
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
 
 done:
 	(void) close(fd);
@@ -3213,29 +3109,6 @@ stmfCreateTargetGroup(stmfGroupName *targetGroupName)
 	 * store.
 	 */
 	ret = psCreateTargetGroup((char *)targetGroupName);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_EXISTS:
-			ret = STMF_ERROR_EXISTS;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfCreateTargetGroup:psCreateTargetGroup"
-			    ":error(%d)", ret);
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
 
 done:
 	(void) close(fd);
@@ -3293,29 +3166,6 @@ stmfDeleteHostGroup(stmfGroupName *hostGroupName)
 	 * persistent store.
 	 */
 	ret = psDeleteHostGroup((char *)hostGroupName);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_NOT_FOUND:
-			ret = STMF_ERROR_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfDeleteHostGroup:psDeleteHostGroup:error(%d)",
-			    ret);
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
 
 done:
 	(void) close(fd);
@@ -3373,29 +3223,6 @@ stmfDeleteTargetGroup(stmfGroupName *targetGroupName)
 	 * persistent store.
 	 */
 	ret = psDeleteTargetGroup((char *)targetGroupName);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_NOT_FOUND:
-			ret = STMF_ERROR_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfDeleteTargetGroup:psDeleteTargetGroup"
-			    ":error(%d)", ret);
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
 
 done:
 	(void) close(fd);
@@ -3760,52 +3587,6 @@ done:
 }
 
 /*
- * Purpose: access persistent config data for host groups and target groups
- */
-static int
-iLoadGroupFromPs(stmfGroupList **groupList, int type)
-{
-	int ret;
-
-	if (groupList == NULL) {
-		return (STMF_ERROR_INVALID_ARG);
-	}
-
-	if (type == HOST_GROUP) {
-		ret = psGetHostGroupList(groupList);
-	} else if (type == TARGET_GROUP) {
-		ret = psGetTargetGroupList(groupList);
-	} else {
-		return (STMF_ERROR_INVALID_ARG);
-	}
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_NOT_FOUND:
-			ret = STMF_ERROR_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfGetHostGroupList:psGetHostGroupList:error(%d)",
-			    ret);
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
-
-	return (ret);
-}
-
-/*
  * stmfGetHostGroupList
  *
  * Purpose: Retrieves the list of initiator group oids
@@ -3823,54 +3604,6 @@ stmfGetHostGroupList(stmfGroupList **hostGroupList)
 	}
 
 	ret = groupListIoctl(hostGroupList, HOST_GROUP);
-	return (ret);
-}
-
-
-/*
- * Purpose: access persistent config data for host groups and target groups
- */
-static int
-iLoadGroupMembersFromPs(stmfGroupName *groupName,
-    stmfGroupProperties **groupProp, int type)
-{
-	int ret;
-
-	if (groupName == NULL) {
-		return (STMF_ERROR_INVALID_ARG);
-	}
-
-	if (type == HOST_GROUP) {
-		ret = psGetHostGroupMemberList((char *)groupName, groupProp);
-	} else if (type == TARGET_GROUP) {
-		ret = psGetTargetGroupMemberList((char *)groupName, groupProp);
-	} else {
-		return (STMF_ERROR_INVALID_ARG);
-	}
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_NOT_FOUND:
-			ret = STMF_ERROR_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "iLoadGroupMembersFromPs:psGetHostGroupList:"
-			    "error(%d)", ret);
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
-
 	return (ret);
 }
 
@@ -3962,33 +3695,8 @@ stmfGetProviderDataProt(char *providerName, nvlist_t **nvl, int providerType,
 int
 stmfGetProviderDataList(stmfProviderList **providerList)
 {
-	int ret;
-
-	ret = psGetProviderDataList(providerList);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfGetProviderDataList:psGetProviderDataList"
-			    ":error(%d)", ret);
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
-
-	return (ret);
+	return (psGetProviderDataList(providerList));
 }
-
 
 /*
  * stmfGetSessionList
@@ -4916,12 +4624,21 @@ loadHostGroups(int fd, stmfGroupList *groupList)
 		    &(groupList->name[i]))) != STMF_STATUS_SUCCESS) {
 			goto out;
 		}
-		ret = iLoadGroupMembersFromPs(&(groupList->name[i]),
-		    &groupProps, HOST_GROUP);
+		ret = psGetHostGroupMemberList(groupList->name[i], &groupProps);
+		if (ret != STMF_STATUS_SUCCESS) {
+			syslog(LOG_ERR, "psGetHostGroupMemberList returned %d "
+			    "in %s", ret, __func__);
+			goto out;
+		}
 		for (j = 0; j < groupProps->cnt; j++) {
 			if ((ret = groupMemberIoctl(fd, STMF_IOCTL_ADD_HG_ENTRY,
 			    &(groupList->name[i]), &(groupProps->name[j])))
 			    != STMF_STATUS_SUCCESS) {
+				syslog(LOG_ERR, "groupMemberIoctl returned %d "
+				    "in %s while adding host group entry %s to "
+				    "host group %s",
+				    ret, __func__, &groupProps->name[j],
+				    &groupList->name[i]);
 				goto out;
 			}
 		}
@@ -4953,23 +4670,31 @@ loadTargetGroups(int fd, stmfGroupList *groupList)
 		    &(groupList->name[i]))) != STMF_STATUS_SUCCESS) {
 			goto out;
 		}
-		ret = iLoadGroupMembersFromPs(&(groupList->name[i]),
-		    &groupProps, TARGET_GROUP);
+		ret = psGetTargetGroupMemberList(groupList->name[i],
+		    &groupProps);
+		if (ret != STMF_STATUS_SUCCESS) {
+			syslog(LOG_ERR, "psGetTargetGroupMemberList returned "
+			    "%d in %s", ret, __func__);
+			goto out;
+		}
 		for (j = 0; j < groupProps->cnt; j++) {
 			if ((ret = groupMemberIoctl(fd, STMF_IOCTL_ADD_TG_ENTRY,
 			    &(groupList->name[i]), &(groupProps->name[j])))
 			    != STMF_STATUS_SUCCESS) {
+				syslog(LOG_ERR, "groupMemberIoctl returned %d "
+				    "in %s while adding target group entry %s "
+				    "to target group %s",
+				    ret, __func__, &groupProps->name[j],
+				    &groupList->name[i]);
 				goto out;
 			}
 		}
 	}
 
-
 out:
 	stmfFreeMemory(groupProps);
 	return (ret);
 }
-
 
 /*
  * loadStore
@@ -4984,188 +4709,136 @@ out:
 static int
 loadStore(int fd)
 {
-	int ret;
+#define	GOTO_OUT_ON_ERROR(_intermediate, _final) \
+	if (STMF_STATUS_IS_ERROR(_intermediate)) { \
+		(_final) = (_intermediate); \
+		goto out; \
+	}
+
+	/* final return value */
+	int ret = STMF_STATUS_SUCCESS;
+	/* intermediate return from called ps/stmf functions */
+	int iret;
 	int i, j;
 	stmfGroupList *groupList = NULL;
 	stmfGuidList *guidList = NULL;
 	stmfViewEntryList *viewEntryList = NULL;
+	stmfViewEntry *ve;
 	stmfProviderList *providerList = NULL;
 	int providerType;
 	nvlist_t *nvl = NULL;
-
-
+	char guidAsciiBuf[GUID_STR_MIN_SIZE];
 
 	/* load host groups */
-	ret = iLoadGroupFromPs(&groupList, HOST_GROUP);
-	if (ret != STMF_STATUS_SUCCESS) {
-		return (ret);
-	}
-	ret = loadHostGroups(fd, groupList);
-	if (ret != STMF_STATUS_SUCCESS) {
-		goto out;
-	}
+	iret = psGetHostGroupList(&groupList);
+	GOTO_OUT_ON_ERROR(iret, ret)
+
+	iret = loadHostGroups(fd, groupList);
+	GOTO_OUT_ON_ERROR(iret, ret)
 
 	stmfFreeMemory(groupList);
 	groupList = NULL;
 
 	/* load target groups */
-	ret = iLoadGroupFromPs(&groupList, TARGET_GROUP);
-	if (ret != STMF_STATUS_SUCCESS) {
-		goto out;
-	}
-	ret = loadTargetGroups(fd, groupList);
-	if (ret != STMF_STATUS_SUCCESS) {
-		goto out;
-	}
+	iret = psGetTargetGroupList(&groupList);
+	GOTO_OUT_ON_ERROR(iret, ret)
+
+	iret = loadTargetGroups(fd, groupList);
+	GOTO_OUT_ON_ERROR(iret, ret)
 
 	stmfFreeMemory(groupList);
 	groupList = NULL;
 
 	/* Get the guid list */
-	ret = psGetLogicalUnitList(&guidList);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_NOT_FOUND:
-			ret = STMF_ERROR_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
-
-	if (ret != STMF_STATUS_SUCCESS) {
-		goto out;
-	}
+	iret = psGetLogicalUnitList(&guidList);
+	GOTO_OUT_ON_ERROR(iret, ret)
 
 	/*
 	 * We have the guid list, now get the corresponding
 	 * view entries for each guid
 	 */
 	for (i = 0; i < guidList->cnt; i++) {
-		ret = psGetViewEntryList(&guidList->guid[i], &viewEntryList);
-		switch (ret) {
-			case STMF_PS_SUCCESS:
-				ret = STMF_STATUS_SUCCESS;
-				break;
-			case STMF_PS_ERROR_NOT_FOUND:
-				ret = STMF_ERROR_NOT_FOUND;
-				break;
-			case STMF_PS_ERROR_BUSY:
-				ret = STMF_ERROR_BUSY;
-				break;
-			case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-				ret = STMF_ERROR_SERVICE_NOT_FOUND;
-				break;
-			case STMF_PS_ERROR_VERSION_MISMATCH:
-				ret = STMF_ERROR_SERVICE_DATA_VERSION;
-				break;
-			default:
-				ret = STMF_STATUS_ERROR;
-				break;
+		iret = psGetViewEntryList(&guidList->guid[i], &viewEntryList);
+		GOTO_OUT_ON_ERROR(iret, ret)
+
+		/*
+		 * Save first warning for return, then try to add the
+		 * view entries we successfully loaded.
+		 */
+		if (STMF_STATUS_IS_WARNING(iret) &&
+		    ret == STMF_STATUS_SUCCESS) {
+			ret = iret;
 		}
-		if (ret != STMF_STATUS_SUCCESS) {
-			goto out;
+
+		/*
+		 * A warning with a NULL viewEntryList means
+		 * psGetViewEntryList failed to get any ViewEntries.  Skip this
+		 * GUID.  A NULL viewEntryList without a warning is a bug, and
+		 * we'll blow up and dump core below so we can debug it rather
+		 * than causing some subtle error somewhere else.
+		 */
+		if (STMF_STATUS_IS_WARNING(iret) && viewEntryList == NULL) {
+			(void) psFormatGuid(&guidList->guid[i], guidAsciiBuf,
+			    sizeof (guidAsciiBuf));
+			syslog(LOG_ERR, "%s:failed to get view entry list for "
+			    "LU %s: %x - skipping", __func__, guidAsciiBuf,
+			    iret);
+			continue;
 		}
+
 		for (j = 0; j < viewEntryList->cnt; j++) {
-			ret = addViewEntryIoctl(fd, &guidList->guid[i],
-			    &viewEntryList->ve[j]);
-			if (ret != STMF_STATUS_SUCCESS) {
-				goto out;
+			ve = &viewEntryList->ve[j];
+			iret = addViewEntryIoctl(fd, &guidList->guid[i], ve);
+			if (STMF_STATUS_IS_ERROR(iret)) {
+				ret = iret;
+				(void) psFormatGuid(&guidList->guid[i],
+				    guidAsciiBuf, sizeof (guidAsciiBuf));
+
+				/*
+				 * It would be more user-friendly to log the
+				 * view entry property group name, but it isn't
+				 * part of stmfViewEntry.  The LU GUID and view
+				 * entry index will have to suffice.  This can
+				 * happen if, for example, there are two
+				 * view_entry property groups with the same
+				 * lu_nbr.  Since there can be a large number of
+				 * view entries configured on a system, continue
+				 * processing the config, and error out so any
+				 * errors can be corrected all at the same time.
+				 *
+				 * store.c guarantees that we have a valid
+				 * view entry index here.
+				 */
+				syslog(LOG_ERR, "Failed to add view entry for "
+				    "LU %s, host group %s, view entry index %d:"
+				    "%x", guidAsciiBuf,
+				    ve->allHosts ? "*" : ve->hostGroup,
+				    ve->veIndex, ret);
 			}
 		}
 	}
 
-	/* get the list of providers that have data */
-	ret = psGetProviderDataList(&providerList);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_NOT_FOUND:
-			ret = STMF_ERROR_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
-	if (ret != STMF_STATUS_SUCCESS) {
+	/*
+	 * We validated as much of the view entry information as possible, now
+	 * fall out with an error so somebody can fix the problems.
+	 */
+	if (STMF_STATUS_IS_ERROR(ret)) {
 		goto out;
 	}
 
+	/* get the list of providers that have data */
+	iret = psGetProviderDataList(&providerList);
+	GOTO_OUT_ON_ERROR(iret, ret)
+
 	for (i = 0; i < providerList->cnt; i++) {
 		providerType = providerList->provider[i].providerType;
-		ret = psGetProviderData(providerList->provider[i].name,
+		iret = psGetProviderData(providerList->provider[i].name,
 		    &nvl, providerType, NULL);
-		switch (ret) {
-			case STMF_PS_SUCCESS:
-				ret = STMF_STATUS_SUCCESS;
-				break;
-			case STMF_PS_ERROR_NOT_FOUND:
-				ret = STMF_ERROR_NOT_FOUND;
-				break;
-			case STMF_PS_ERROR_BUSY:
-				ret = STMF_ERROR_BUSY;
-				break;
-			case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-				ret = STMF_ERROR_SERVICE_NOT_FOUND;
-				break;
-			case STMF_PS_ERROR_VERSION_MISMATCH:
-				ret = STMF_ERROR_SERVICE_DATA_VERSION;
-				break;
-			default:
-				ret = STMF_STATUS_ERROR;
-				break;
-		}
-		if (ret != STMF_STATUS_SUCCESS) {
-			goto out;
-		}
+		GOTO_OUT_ON_ERROR(iret, ret)
 
-		/* call setProviderData */
-		ret = setProviderData(fd, providerList->provider[i].name, nvl,
-		    providerType, NULL);
-		switch (ret) {
-			case STMF_PS_SUCCESS:
-				ret = STMF_STATUS_SUCCESS;
-				break;
-			case STMF_PS_ERROR_NOT_FOUND:
-				ret = STMF_ERROR_NOT_FOUND;
-				break;
-			case STMF_PS_ERROR_BUSY:
-				ret = STMF_ERROR_BUSY;
-				break;
-			case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-				ret = STMF_ERROR_SERVICE_NOT_FOUND;
-				break;
-			case STMF_PS_ERROR_VERSION_MISMATCH:
-				ret = STMF_ERROR_SERVICE_DATA_VERSION;
-				break;
-			default:
-				ret = STMF_STATUS_ERROR;
-				break;
-		}
-		if (ret != STMF_STATUS_SUCCESS) {
-			goto out;
-		}
+		iret = setProviderData(fd, providerList->provider[i].name,
+		    nvl, providerType, NULL);
+		GOTO_OUT_ON_ERROR(iret, ret)
 
 		nvlist_free(nvl);
 		nvl = NULL;
@@ -5184,6 +4857,7 @@ out:
 		nvlist_free(nvl);
 	}
 	return (ret);
+#undef GOTO_OUT_ON_ERROR
 }
 
 /*
@@ -5357,6 +5031,11 @@ err:
  *
  * Purpose - load the configuration data from smf into stmf
  *
+ * stmfLoadConfig will return a WARNING if the stmf configuration is non-fatally
+ * corrupted.  Callers that want to continue execution after a warning is
+ * returned from this function should test the result using
+ * !STMF_STATUS_IS_ERROR rather than checking for equality with
+ * STMF_STATUS_SUCCESS.
  */
 int
 stmfLoadConfig(void)
@@ -5412,7 +5091,7 @@ stmfLoadConfig(void)
 
 	/* Load the persistent configuration data */
 	ret = loadStore(fd);
-	if (ret != 0) {
+	if (STMF_STATUS_IS_ERROR(ret)) {
 		goto done;
 	}
 
@@ -5420,7 +5099,7 @@ stmfLoadConfig(void)
 	stmfStateSet.config_state = STMF_CONFIG_INIT_DONE;
 
 done:
-	if (ret == STMF_STATUS_SUCCESS) {
+	if (!STMF_STATUS_IS_ERROR(ret)) {
 		ret = setStmfState(fd, &stmfStateSet, STMF_SERVICE_TYPE);
 	}
 	(void) close(fd);
@@ -5556,20 +5235,6 @@ stmfSetStmfProp(uint8_t propType, char *propVal)
 			return (STMF_ERROR_INVALID_ARG);
 	}
 	ret = psSetStmfProp(propType, propVal);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfSetStmfProp:psSetStmfProp:error(%d)",
-			    ret);
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
 	return (ret);
 }
 
@@ -5598,23 +5263,6 @@ stmfGetStmfProp(uint8_t propType, char *propVal, size_t *propLen)
 		return (STMF_ERROR_INVALID_ARG);
 	}
 
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_NOT_FOUND:
-			ret = STMF_ERROR_NOT_FOUND;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfGetStmfProp:psGetStmfProp:error(%d)",
-			    ret);
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
 	return (ret);
 }
 
@@ -5624,7 +5272,7 @@ setStmfProp(stmf_set_props_t *stmf_set_props)
 	char propVal[MAXNAMELEN] = {0};
 	int ret;
 	if ((ret = psGetStmfProp(STMF_DEFAULT_LU_STATE, propVal)) ==
-	    STMF_PS_SUCCESS) {
+	    STMF_STATUS_SUCCESS) {
 		if (strncmp(propVal, "offline", strlen(propVal)) == 0) {
 			stmf_set_props->default_lu_state_value =
 			    STMF_STATE_OFFLINE;
@@ -5639,7 +5287,7 @@ setStmfProp(stmf_set_props_t *stmf_set_props)
 	}
 
 	if ((ret = psGetStmfProp(STMF_DEFAULT_TARGET_PORT_STATE, propVal)) ==
-	    STMF_PS_SUCCESS) {
+	    STMF_STATUS_SUCCESS) {
 		if (strncmp(propVal, "offline", strlen(propVal)) == 0) {
 			stmf_set_props->default_target_state_value =
 			    STMF_STATE_OFFLINE;
@@ -5653,20 +5301,6 @@ setStmfProp(stmf_set_props_t *stmf_set_props)
 		goto done;
 	}
 done:
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_NOT_FOUND:
-			ret = STMF_ERROR_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		default:
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
 	return (ret);
 }
 
@@ -5963,6 +5597,7 @@ stmfOnlineLogicalUnit(stmfGuid *lu)
 int
 stmfRemoveFromHostGroup(stmfGroupName *hostGroupName, stmfDevid *hostName)
 {
+	char *hostid = NULL;
 	int ret;
 	int fd;
 
@@ -5993,36 +5628,18 @@ stmfRemoveFromHostGroup(stmfGroupName *hostGroupName, stmfDevid *hostName)
 		goto done;
 	}
 
-	ret = psRemoveHostGroupMember((char *)hostGroupName,
-	    (char *)hostName->ident);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_MEMBER_NOT_FOUND:
-			ret = STMF_ERROR_MEMBER_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_GROUP_NOT_FOUND:
-			ret = STMF_ERROR_GROUP_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfRemoveFromHostGroup"
-			    "psRemoveHostGroupMember:error(%d)", ret);
-			ret = STMF_STATUS_ERROR;
-			break;
+	if ((hostid = calloc(1, hostName->identLength + 1)) == NULL) {
+		ret = STMF_ERROR_NOMEM;
+		goto done;
 	}
 
+	bcopy(hostName->ident, hostid, hostName->identLength);
+	hostid[hostName->identLength] = '\0';
+
+	ret = psRemoveHostGroupMember((char *)hostGroupName, hostid);
+
 done:
+	free(hostid);
 	(void) close(fd);
 	return (ret);
 }
@@ -6038,6 +5655,7 @@ done:
 int
 stmfRemoveFromTargetGroup(stmfGroupName *targetGroupName, stmfDevid *targetName)
 {
+	char *targetid = NULL;
 	int ret;
 	int fd;
 
@@ -6068,36 +5686,18 @@ stmfRemoveFromTargetGroup(stmfGroupName *targetGroupName, stmfDevid *targetName)
 		goto done;
 	}
 
-	ret = psRemoveTargetGroupMember((char *)targetGroupName,
-	    (char *)targetName->ident);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_MEMBER_NOT_FOUND:
-			ret = STMF_ERROR_MEMBER_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_GROUP_NOT_FOUND:
-			ret = STMF_ERROR_GROUP_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfRemoveFromTargetGroup"
-			    "psRemoveTargetGroupMember:error(%d)", ret);
-			ret = STMF_STATUS_ERROR;
-			break;
+	if ((targetid = calloc(1, targetName->identLength + 1)) == NULL) {
+		ret = STMF_ERROR_NOMEM;
+		goto done;
 	}
 
+	bcopy(targetName->ident, targetid, targetName->identLength);
+	targetid[targetName->identLength] = '\0';
+
+	ret = psRemoveTargetGroupMember((char *)targetGroupName, targetid);
+
 done:
+	free(targetid);
 	(void) close(fd);
 	return (ret);
 }
@@ -6186,29 +5786,6 @@ stmfRemoveViewEntry(stmfGuid *lu, uint32_t viewEntryIndex)
 	}
 
 	ret = psRemoveViewEntry(lu, viewEntryIndex);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_NOT_FOUND:
-			ret = STMF_ERROR_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfRemoveViewEntry" "psRemoveViewEntry:error(%d)",
-			    ret);
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
 
 done:
 	(void) close(fd);
@@ -6288,32 +5865,6 @@ stmfSetProviderDataProt(char *providerName, nvlist_t *nvl, int providerType,
 
 	/* setting driver provider data successful. Now persist it */
 	ret = psSetProviderData(providerName, nvl, providerType, NULL);
-	switch (ret) {
-		case STMF_PS_SUCCESS:
-			ret = STMF_STATUS_SUCCESS;
-			break;
-		case STMF_PS_ERROR_EXISTS:
-			ret = STMF_ERROR_EXISTS;
-			break;
-		case STMF_PS_ERROR_BUSY:
-			ret = STMF_ERROR_BUSY;
-			break;
-		case STMF_PS_ERROR_SERVICE_NOT_FOUND:
-			ret = STMF_ERROR_SERVICE_NOT_FOUND;
-			break;
-		case STMF_PS_ERROR_VERSION_MISMATCH:
-			ret = STMF_ERROR_SERVICE_DATA_VERSION;
-			break;
-		case STMF_PS_ERROR_PROV_DATA_STALE:
-			ret = STMF_ERROR_PROV_DATA_STALE;
-			break;
-		default:
-			syslog(LOG_DEBUG,
-			    "stmfSetProviderData"
-			    "psSetProviderData:error(%d)", ret);
-			ret = STMF_STATUS_ERROR;
-			break;
-	}
 
 done:
 	return (ret);
@@ -6491,6 +6042,8 @@ setProviderData(int fd, char *providerName, nvlist_t *nvl, int providerType,
 	ppi = (stmf_ppioctl_data_t *)calloc(1, nvlistEncodedSize +
 	    sizeof (stmf_ppioctl_data_t));
 	if (ppi == NULL) {
+		syslog(LOG_ERR, "Failed to allocate provider ioctl data in %s",
+		    __func__);
 		return (STMF_ERROR_NOMEM);
 	}
 
@@ -6502,6 +6055,7 @@ setProviderData(int fd, char *providerName, nvlist_t *nvl, int providerType,
 	allocatedNvBuffer = (char *)&ppi->ppi_data;
 	if (nvlist_pack(nvl, &allocatedNvBuffer, &nvlistEncodedSize,
 	    NV_ENCODE_XDR, 0) != 0) {
+		syslog(LOG_ERR, "unable to pack nvlist in %s", __func__);
 		return (STMF_STATUS_ERROR);
 	}
 
@@ -6592,7 +6146,7 @@ stmfSetPersistMethod(uint8_t persistType, boolean_t serviceSet)
 	/* Is this for this library open or in SMF */
 	if (serviceSet == B_TRUE) {
 		ret = psSetServicePersist(persistType);
-		if (ret != STMF_PS_SUCCESS) {
+		if (ret != STMF_STATUS_SUCCESS) {
 			ret = STMF_ERROR_PERSIST_TYPE;
 			/* Set to old value */
 			iPersistType = oldPersist;
@@ -6619,7 +6173,7 @@ iGetPersistMethod()
 	} else {
 		int ret;
 		ret = psGetServicePersist(&persistType);
-		if (ret != STMF_PS_SUCCESS) {
+		if (ret != STMF_STATUS_SUCCESS) {
 			/* set to default */
 			persistType = STMF_DEFAULT_PERSIST;
 		}
@@ -6642,7 +6196,7 @@ stmfGetPersistMethod(uint8_t *persistType, boolean_t serviceState)
 	}
 	if (serviceState) {
 		ret = psGetServicePersist(persistType);
-		if (ret != STMF_PS_SUCCESS) {
+		if (ret != STMF_STATUS_SUCCESS) {
 			ret = STMF_ERROR_PERSIST_TYPE;
 		}
 	} else {
@@ -6857,7 +6411,7 @@ validateLunNumIoctl(int fd, stmfViewEntry *viewEntry)
 						break;
 					default:
 						syslog(LOG_DEBUG,
-						    "addViewEntryIoctl"
+						    "validateLunNumIoctl"
 						    ":error(%d)",
 						    stmfIoctl.stmf_error);
 						ret = STMF_STATUS_ERROR;

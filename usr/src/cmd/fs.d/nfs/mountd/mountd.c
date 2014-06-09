@@ -19,7 +19,9 @@
  * CDDL HEADER END
  *
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2011 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -288,6 +290,7 @@ remove_head_of_queue(void)
 static void
 do_logging_queue(logging_data *lq)
 {
+	logging_data	*lq_clean = NULL;
 	int		cleared = 0;
 	char		*host;
 
@@ -295,6 +298,7 @@ do_logging_queue(logging_data *lq)
 
 	while (lq) {
 		if (lq->ld_host == NULL) {
+			clnames = NULL;
 			DTRACE_PROBE(mountd, name_by_lazy);
 			if (getclientsnames_lazy(lq->ld_netid,
 			    &lq->ld_nb, &clnames) != 0)
@@ -313,12 +317,20 @@ do_logging_queue(logging_data *lq)
 		if (lq->ld_host != host)
 			netdir_free(clnames, ND_HOSTSERVLIST);
 
-		free_logging_data(lq);
-		cleared++;
+		lq->ld_next = lq_clean;
+		lq_clean = lq;
 
 		(void) mutex_lock(&logging_queue_lock);
 		lq = remove_head_of_queue();
 		(void) mutex_unlock(&logging_queue_lock);
+	}
+
+	while (lq_clean) {
+		lq = lq_clean;
+		lq_clean = lq->ld_next;
+
+		free_logging_data(lq);
+		cleared++;
 	}
 
 	DTRACE_PROBE1(mountd, logging_cleared, cleared);
@@ -370,6 +382,7 @@ main(int argc, char *argv[])
 	int	c;
 	int	rpc_svc_fdunlim = 1;
 	int	rpc_svc_mode = RPC_SVC_MT_AUTO;
+	int	maxthreads;
 	int	maxrecsz = RPC_MAXDATASIZE;
 	bool_t	exclbind = TRUE;
 	bool_t	can_do_mlp;
@@ -422,6 +435,7 @@ main(int argc, char *argv[])
 		syslog(LOG_ERR, "Reading of mountd_max_threads from SMF "
 		    "failed, using default value");
 	}
+	maxthreads = 0;
 
 	while ((c = getopt(argc, argv, "vrm:")) != EOF) {
 		switch (c) {
@@ -432,11 +446,15 @@ main(int argc, char *argv[])
 			rejecting = 1;
 			break;
 		case 'm':
+			maxthreads = atoi(optarg);
+			if (maxthreads < 1) {
+				(void) fprintf(stderr,
+	"%s: must specify positive maximum threads count, using default\n",
 			if (convert_int(&tmp, optarg) != 0 || tmp < 1) {
 				(void) fprintf(stderr, "%s: invalid "
 				    "max_threads option, using defaults\n",
 				    argv[0]);
-				break;
+				maxthreads = 0;
 			}
 			max_threads = tmp;
 			break;
@@ -791,7 +809,8 @@ getclientsnames_common(struct netconfig *nconf, struct netbuf **nbuf,
 	 * Use the this API instead of the netdir_getbyaddr()
 	 * to avoid service lookup.
 	 */
-	if (__netdir_getbyaddr_nosrv(nconf, serv, *nbuf) != 0) {
+	if (__netdir_getbyaddr_nosrv(nconf, serv, *nbuf) != 0 ||
+	    *serv == NULL) {
 		if (strcmp(nconf->nc_protofmly, NC_INET) == 0) {
 			struct sockaddr_in *sa;
 
@@ -1304,6 +1323,7 @@ mount(struct svc_req *rqstp)
 		host = clnames->h_hostservs[0].h_host;
 
 	if (flavor_count == 0) {
+		DTRACE_PROBE2(mountd, host_fenced_out, sh->sh_path, host);
 		error = EACCES;
 		goto reply;
 	}

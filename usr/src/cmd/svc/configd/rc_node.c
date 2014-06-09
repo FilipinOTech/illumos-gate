@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
  */
 
 /*
@@ -7415,6 +7416,7 @@ rc_notify_info_remove_locked(rc_notify_info_t *rnip)
 		    np->rcn_info == NULL)
 			rc_notify_remove_locked(np);
 	}
+	assert(rc_notify_in_use == 0);
 	(void) uu_list_remove(rc_notify_list, me);
 
 	while (rnip->rni_waiters) {

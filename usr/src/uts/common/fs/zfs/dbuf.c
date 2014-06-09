@@ -21,7 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2013, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
@@ -40,6 +40,9 @@
 #include <sys/dmu_zfetch.h>
 #include <sys/sa.h>
 #include <sys/sa_impl.h>
+#include <sys/mooch_byteswap.h>
+#include <sys/zfeature.h>
+#include <sys/blkptr.h>
 #include <sys/range_tree.h>
 
 /*
@@ -179,8 +182,7 @@ dbuf_hash_insert(dmu_buf_impl_t *db)
 }
 
 /*
- * Remove an entry from the hash table.  This operation will
- * fail if there are any existing holds on the db.
+ * Remove an entry from the hash table.  It must be in the EVICTING state.
  */
 static void
 dbuf_hash_remove(dmu_buf_impl_t *db)
@@ -192,7 +194,7 @@ dbuf_hash_remove(dmu_buf_impl_t *db)
 	dmu_buf_impl_t *dbf, **dbp;
 
 	/*
-	 * We musn't hold db_mtx to maintin lock ordering:
+	 * We musn't hold db_mtx to maintain lock ordering:
 	 * DBUF_HASH_MUTEX > db_mtx.
 	 */
 	ASSERT(refcount_is_zero(&db->db_holds));
@@ -515,6 +517,91 @@ dbuf_read_done(zio_t *zio, arc_buf_t *buf, void *vdb)
 	dbuf_rele_and_unlock(db, NULL);
 }
 
+typedef struct mooch_read_arg {
+	dmu_buf_impl_t *mra_origin_db;
+	dmu_buf_impl_t *mra_clone_db;
+} mooch_read_arg_t;
+
+static void
+mooch_read_done(zio_t *zio)
+{
+	mooch_read_arg_t *mra = zio->io_private;
+
+	ASSERT3U(mra->mra_clone_db->db.db_size, ==,
+	    mra->mra_origin_db->db.db_size);
+
+	arc_buf_t *abuf = arc_buf_alloc(zio->io_spa,
+	    mra->mra_clone_db->db.db_size, mra->mra_clone_db,
+	    DBUF_GET_BUFC_TYPE(mra->mra_clone_db));
+
+	if (zio->io_error == 0) {
+		mooch_byteswap_reconstruct(&mra->mra_origin_db->db,
+		    abuf->b_data, mra->mra_clone_db->db_blkptr);
+	}
+	dbuf_read_done(zio, abuf, mra->mra_clone_db);
+	dbuf_rele(mra->mra_origin_db, NULL);
+	kmem_free(mra, sizeof (*mra));
+}
+
+/*
+ * Call with db_mtx held, returns with it released.
+ */
+static void
+dbuf_read_mooch(dmu_buf_impl_t *db, uint64_t refd_obj, uint32_t flags,
+    zio_t *pio)
+{
+	objset_t *origin_objset;
+	int error;
+
+	ASSERT(refd_obj != 0);
+	ASSERT(MUTEX_HELD(&db->db_mtx));
+	ASSERT(BP_IS_EMBEDDED(db->db_blkptr) &&
+	    BPE_GET_ETYPE(db->db_blkptr) == BP_EMBEDDED_TYPE_MOOCH_BYTESWAP);
+	ASSERT(!dbuf_is_metadata(db));
+	ASSERT(spa_feature_is_active(dmu_objset_spa(db->db_objset),
+	    SPA_FEATURE_MOOCH_BYTESWAP));
+	ASSERT(db->db_objset->os_dsl_dataset->ds_mooch_byteswap);
+
+	db->db_state = DB_READ;
+	mutex_exit(&db->db_mtx);
+
+	error = dmu_objset_mooch_origin(db->db_objset, &origin_objset);
+	if (error != 0) {
+		pio->io_error = EIO;
+		return;
+	}
+
+	/*
+	 * Get the dbuf that we mooch from the origin, but don't read it in
+	 * synchronously.
+	 */
+	dmu_buf_t *origin_db;
+	error = dmu_buf_hold_noread(origin_objset, refd_obj,
+	    db->db.db_offset, NULL, &origin_db);
+	if (error != 0) {
+		pio->io_error = EIO;
+		return;
+	}
+
+	dbuf_add_ref(db, NULL);
+
+	/*
+	 * Insert a "null" zio that will be notified (by having its done
+	 * func called) when the child zio (which reads the dbuf from
+	 * the origin) is complete.
+	 */
+	mooch_read_arg_t *mra = kmem_alloc(sizeof (*mra), KM_SLEEP);
+	mra->mra_clone_db = db;
+	mra->mra_origin_db = (dmu_buf_impl_t *)origin_db;
+	pio = zio_null(pio, dmu_objset_spa(db->db_objset),
+	    NULL, mooch_read_done, mra, 0);
+
+	/* Issue asynchronous read of origin dbuf. */
+	VERIFY0(dbuf_read(mra->mra_origin_db, pio, flags));
+	zio_nowait(pio);
+
+}
+
 static void
 dbuf_read_impl(dmu_buf_impl_t *db, zio_t *zio, uint32_t *flags)
 {
@@ -565,6 +652,15 @@ dbuf_read_impl(dmu_buf_impl_t *db, zio_t *zio, uint32_t *flags)
 		db->db_state = DB_CACHED;
 		*flags |= DB_RF_CACHED;
 		mutex_exit(&db->db_mtx);
+		return;
+	}
+
+	if (BP_IS_EMBEDDED(db->db_blkptr) &&
+	    BPE_GET_ETYPE(db->db_blkptr) == BP_EMBEDDED_TYPE_MOOCH_BYTESWAP) {
+		uint64_t refd_obj = dn->dn_origin_obj_refd;
+		DB_DNODE_EXIT(db);
+		dbuf_read_mooch(db, refd_obj,
+		    (*flags) & ~DB_RF_HAVESTRUCT, zio);
 		return;
 	}
 
@@ -1413,11 +1509,61 @@ dmu_buf_will_fill(dmu_buf_t *db_fake, dmu_tx_t *tx)
 	(void) dbuf_dirty(db, tx);
 }
 
-#pragma weak dmu_buf_fill_done = dbuf_fill_done
+static void
+dbuf_override_impl(dmu_buf_impl_t *db, const blkptr_t *bp, dmu_tx_t *tx)
+{
+	struct dirty_leaf *dl;
+
+	ASSERT3U(db->db_last_dirty->dr_txg, ==, tx->tx_txg);
+	dl = &db->db_last_dirty->dt.dl;
+	dl->dr_overridden_by = *bp;
+	dl->dr_override_state = DR_OVERRIDDEN;
+	dl->dr_overridden_by.blk_birth = db->db_last_dirty->dr_txg;
+}
+
 /* ARGSUSED */
 void
-dbuf_fill_done(dmu_buf_impl_t *db, dmu_tx_t *tx)
+dmu_buf_fill_done(dmu_buf_t *dbuf, dmu_tx_t *tx)
 {
+	dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbuf;
+	uint64_t refd_obj;
+
+	/*
+	 * If this object can implicitly reference an object in its origin,
+	 * and this is the first time this block is being written, then
+	 * see if its data can be represented as a transformation of the
+	 * block at the same offset in the origin's object.
+	 */
+	DB_DNODE_ENTER(db);
+	refd_obj = DB_DNODE(db)->dn_origin_obj_refd;
+	DB_DNODE_EXIT(db);
+	if (refd_obj != 0 && db->db_level == 0 &&
+	    db->db_blkid != DMU_BONUS_BLKID &&
+	    (db->db_blkptr == NULL || BP_IS_HOLE(db->db_blkptr))) {
+		dmu_buf_t *origin_db;
+		objset_t *origin_objset;
+		int error;
+
+		ASSERT(spa_feature_is_active(dmu_objset_spa(db->db_objset),
+		    SPA_FEATURE_MOOCH_BYTESWAP));
+		ASSERT(db->db_objset->os_dsl_dataset->ds_mooch_byteswap);
+
+		error = dmu_objset_mooch_origin(db->db_objset, &origin_objset);
+		if (error == 0) {
+			error = dmu_buf_hold(origin_objset, refd_obj,
+			    db->db.db_offset, FTAG, &origin_db, 0);
+		}
+		if (error == 0) {
+			blkptr_t bp;
+
+			error = mooch_byteswap_determine(origin_db,
+			    &db->db, &bp);
+			if (error == 0)
+				dbuf_override_impl(db, &bp, tx);
+			dmu_buf_rele(origin_db, FTAG);
+		}
+	}
+
 	mutex_enter(&db->db_mtx);
 	DBUF_VERIFY(db);
 
@@ -1433,6 +1579,44 @@ dbuf_fill_done(dmu_buf_impl_t *db, dmu_tx_t *tx)
 		cv_broadcast(&db->db_changed);
 	}
 	mutex_exit(&db->db_mtx);
+}
+
+void
+dmu_buf_write_embedded(dmu_buf_t *dbuf, void *data,
+    bp_embedded_type_t etype, enum zio_compress comp,
+    int uncompressed_size, int compressed_size, int byteorder,
+    dmu_tx_t *tx)
+{
+	dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbuf;
+	dmu_object_type_t type;
+
+	if (etype == BP_EMBEDDED_TYPE_DATA) {
+		ASSERT(spa_feature_is_active(dmu_objset_spa(db->db_objset),
+		    SPA_FEATURE_EMBEDDED_DATA));
+	} else if (etype == BP_EMBEDDED_TYPE_MOOCH_BYTESWAP) {
+		ASSERT(spa_feature_is_active(dmu_objset_spa(db->db_objset),
+		    SPA_FEATURE_MOOCH_BYTESWAP));
+		ASSERT(db->db_objset->os_dsl_dataset->ds_mooch_byteswap);
+	}
+
+	DB_DNODE_ENTER(db);
+	type = DB_DNODE(db)->dn_type;
+	DB_DNODE_EXIT(db);
+
+	ASSERT0(db->db_level);
+	ASSERT(db->db_blkid != DMU_BONUS_BLKID);
+
+	dmu_buf_will_not_fill(dbuf, tx);
+
+	blkptr_t bp;
+	encode_embedded_bp_compressed(&bp,
+	    data, comp, uncompressed_size, compressed_size);
+	BPE_SET_ETYPE(&bp, etype);
+	BP_SET_TYPE(&bp, type);
+	BP_SET_LEVEL(&bp, 0);
+	BP_SET_BYTEORDER(&bp, byteorder);
+
+	dbuf_override_impl(db, &bp, tx);
 }
 
 /*
@@ -1504,12 +1688,15 @@ dbuf_assign_arcbuf(dmu_buf_impl_t *db, arc_buf_t *buf, dmu_tx_t *tx)
  * when we are not holding the dn_dbufs_mtx, we can't clear the
  * entry in the dn_dbufs list.  We have to wait until dbuf_destroy()
  * in this case.  For callers from the DMU we will usually see:
- *	dbuf_clear()->arc_buf_evict()->dbuf_do_evict()->dbuf_destroy()
+ *	dbuf_clear()->arc_clear_callback()->dbuf_do_evict()->dbuf_destroy()
  * For the arc callback, we will usually see:
  *	dbuf_do_evict()->dbuf_clear();dbuf_destroy()
  * Sometimes, though, we will get a mix of these two:
- *	DMU: dbuf_clear()->arc_buf_evict()
+ *	DMU: dbuf_clear()->arc_clear_callback()
  *	ARC: dbuf_do_evict()->dbuf_destroy()
+ *
+ * This routine will dissociate the dbuf from the arc, by calling
+ * arc_clear_callback(), but will not evict the data from the ARC.
  */
 void
 dbuf_clear(dmu_buf_impl_t *db)
@@ -1517,7 +1704,7 @@ dbuf_clear(dmu_buf_impl_t *db)
 	dnode_t *dn;
 	dmu_buf_impl_t *parent = db->db_parent;
 	dmu_buf_impl_t *dndb;
-	int dbuf_gone = FALSE;
+	boolean_t dbuf_gone = B_FALSE;
 
 	ASSERT(MUTEX_HELD(&db->db_mtx));
 	ASSERT(refcount_is_zero(&db->db_holds));
@@ -1563,7 +1750,7 @@ dbuf_clear(dmu_buf_impl_t *db)
 	}
 
 	if (db->db_buf)
-		dbuf_gone = arc_buf_evict(db->db_buf);
+		dbuf_gone = arc_clear_callback(db->db_buf);
 
 	if (!dbuf_gone)
 		mutex_exit(&db->db_mtx);
@@ -1731,8 +1918,7 @@ dbuf_create(dnode_t *dn, uint8_t level, uint64_t blkid,
 static int
 dbuf_do_evict(void *private)
 {
-	arc_buf_t *buf = private;
-	dmu_buf_impl_t *db = buf->b_private;
+	dmu_buf_impl_t *db = private;
 
 	if (!MUTEX_HELD(&db->db_mtx))
 		mutex_enter(&db->db_mtx);
@@ -1819,7 +2005,16 @@ dbuf_prefetch(dnode_t *dn, uint64_t blkid, zio_priority_t prio)
 	}
 
 	if (dbuf_findbp(dn, 0, blkid, TRUE, &db, &bp) == 0) {
-		if (bp && !BP_IS_HOLE(bp)) {
+		if (bp != NULL && BP_IS_EMBEDDED(bp) &&
+		    BPE_GET_ETYPE(bp) == BP_EMBEDDED_TYPE_MOOCH_BYTESWAP) {
+			objset_t *origin_os;
+			if (dmu_objset_mooch_origin(dn->dn_objset,
+			    &origin_os) == 0) {
+				dmu_prefetch(origin_os, dn->dn_origin_obj_refd,
+				    blkid * dn->dn_datablksz, dn->dn_datablksz);
+			}
+		}
+		if (bp && !BP_IS_HOLE(bp) && !BP_IS_EMBEDDED(bp)) {
 			dsl_dataset_t *ds = dn->dn_objset->os_dsl_dataset;
 			uint32_t aflags = ARC_NOWAIT | ARC_PREFETCH;
 			zbookmark_t zb;
@@ -2095,11 +2290,23 @@ dbuf_rele_and_unlock(dmu_buf_impl_t *db, void *tag)
 			 * block on-disk. If so, then we simply evict
 			 * ourselves.
 			 */
-			if (!DBUF_IS_CACHEABLE(db) ||
-			    arc_buf_eviction_needed(db->db_buf))
+			if (!DBUF_IS_CACHEABLE(db)) {
+				if (db->db_blkptr != NULL &&
+				    !BP_IS_HOLE(db->db_blkptr) &&
+				    !BP_IS_EMBEDDED(db->db_blkptr)) {
+					spa_t *spa =
+					    dmu_objset_spa(db->db_objset);
+					blkptr_t bp = *db->db_blkptr;
+					dbuf_clear(db);
+					arc_freed(spa, &bp);
+				} else {
+					dbuf_clear(db);
+				}
+			} else if (arc_buf_eviction_needed(db->db_buf)) {
 				dbuf_clear(db);
-			else
+			} else {
 				mutex_exit(&db->db_mtx);
+			}
 		}
 	} else {
 		mutex_exit(&db->db_mtx);
@@ -2451,7 +2658,7 @@ dbuf_write_ready(zio_t *zio, arc_buf_t *buf, void *vdb)
 	uint64_t fill = 0;
 	int i;
 
-	ASSERT(db->db_blkptr == bp);
+	ASSERT3P(db->db_blkptr, ==, bp);
 
 	DB_DNODE_ENTER(db);
 	dn = DB_DNODE(db);
@@ -2463,7 +2670,8 @@ dbuf_write_ready(zio_t *zio, arc_buf_t *buf, void *vdb)
 		ASSERT((db->db_blkid != DMU_SPILL_BLKID &&
 		    BP_GET_TYPE(bp) == dn->dn_type) ||
 		    (db->db_blkid == DMU_SPILL_BLKID &&
-		    BP_GET_TYPE(bp) == dn->dn_bonustype));
+		    BP_GET_TYPE(bp) == dn->dn_bonustype) ||
+		    BP_IS_EMBEDDED(bp));
 		ASSERT(BP_GET_LEVEL(bp) == db->db_level);
 	}
 
@@ -2504,12 +2712,13 @@ dbuf_write_ready(zio_t *zio, arc_buf_t *buf, void *vdb)
 		for (i = db->db.db_size >> SPA_BLKPTRSHIFT; i > 0; i--, ibp++) {
 			if (BP_IS_HOLE(ibp))
 				continue;
-			fill += ibp->blk_fill;
+			fill += BP_GET_FILL(ibp);
 		}
 	}
 	DB_DNODE_EXIT(db);
 
-	bp->blk_fill = fill;
+	if (!BP_IS_EMBEDDED(bp))
+		bp->blk_fill = fill;
 
 	mutex_exit(&db->db_mtx);
 }
@@ -2621,7 +2830,8 @@ dbuf_write_done(zio_t *zio, arc_buf_t *buf, void *vdb)
 			    dn->dn_phys->dn_maxblkid >> (db->db_level * epbs));
 			ASSERT3U(BP_GET_LSIZE(db->db_blkptr), ==,
 			    db->db.db_size);
-			arc_set_callback(db->db_buf, dbuf_do_evict, db);
+			if (!arc_released(db->db_buf))
+				arc_set_callback(db->db_buf, dbuf_do_evict, db);
 		}
 		DB_DNODE_EXIT(db);
 		mutex_destroy(&dr->dt.di.dr_mtx);
@@ -2747,10 +2957,16 @@ dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx)
 	dmu_write_policy(os, dn, db->db_level, wp_flag, &zp);
 	DB_DNODE_EXIT(db);
 
-	if (db->db_level == 0 && dr->dt.dl.dr_override_state == DR_OVERRIDDEN) {
-		ASSERT(db->db_state != DB_NOFILL);
+	if (db->db_level == 0 &&
+	    dr->dt.dl.dr_override_state == DR_OVERRIDDEN) {
+		/*
+		 * The BP for this block has been provided by open context
+		 * (by dmu_sync() or dmu_buf_write_embedded()).
+		 */
+		void *contents = (data != NULL) ? data->b_data : NULL;
+
 		dr->dr_zio = zio_write(zio, os->os_spa, txg,
-		    db->db_blkptr, data->b_data, arc_buf_size(data), &zp,
+		    db->db_blkptr, contents, db->db.db_size, &zp,
 		    dbuf_write_override_ready, NULL, dbuf_write_override_done,
 		    dr, ZIO_PRIORITY_ASYNC_WRITE, ZIO_FLAG_MUSTSUCCEED, &zb);
 		mutex_enter(&db->db_mtx);

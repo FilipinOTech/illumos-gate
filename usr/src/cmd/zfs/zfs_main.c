@@ -21,10 +21,10 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
  * Copyright 2012 Milan Jurik. All rights reserved.
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
  * Copyright (c) 2013 Steven Hartland.  All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
  * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
@@ -47,6 +47,7 @@
 #include <pwd.h>
 #include <signal.h>
 #include <sys/list.h>
+#include <sys/filio.h>
 #include <sys/mkdev.h>
 #include <sys/mntent.h>
 #include <sys/mnttab.h>
@@ -99,6 +100,7 @@ static int zfs_do_hold(int argc, char **argv);
 static int zfs_do_holds(int argc, char **argv);
 static int zfs_do_release(int argc, char **argv);
 static int zfs_do_diff(int argc, char **argv);
+static int zfs_do_mooch(int argc, char **argv);
 static int zfs_do_bookmark(int argc, char **argv);
 
 /*
@@ -146,6 +148,7 @@ typedef enum {
 	HELP_HOLDS,
 	HELP_RELEASE,
 	HELP_DIFF,
+	HELP_MOOCH,
 	HELP_BOOKMARK,
 } zfs_help_t;
 
@@ -200,6 +203,7 @@ static zfs_command_t command_table[] = {
 	{ "holds",	zfs_do_holds,		HELP_HOLDS		},
 	{ "release",	zfs_do_release,		HELP_RELEASE		},
 	{ "diff",	zfs_do_diff,		HELP_DIFF		},
+	{ "mooch",	zfs_do_mooch,		HELP_MOOCH		},
 };
 
 #define	NCOMMAND	(sizeof (command_table) / sizeof (command_table[0]))
@@ -236,8 +240,9 @@ get_usage(zfs_help_t idx)
 		return (gettext("\tupgrade [-v]\n"
 		    "\tupgrade [-r] [-V version] <-a | filesystem ...>\n"));
 	case HELP_LIST:
-		return (gettext("\tlist [-Hp] [-r|-d max] [-o property[,...]] "
-		    "[-s property]...\n\t    [-S property]... [-t type[,...]] "
+		return (gettext("\tlist [-rH][-d max] "
+		    "[-o property[,...]] [-t type[,...]] [-s property] ...\n"
+		    "\t    [-S property] ... "
 		    "[filesystem|volume|snapshot] ...\n"));
 	case HELP_MOUNT:
 		return (gettext("\tmount\n"
@@ -256,9 +261,9 @@ get_usage(zfs_help_t idx)
 	case HELP_ROLLBACK:
 		return (gettext("\trollback [-rRf] <snapshot>\n"));
 	case HELP_SEND:
-		return (gettext("\tsend [-DnPpRv] [-[iI] snapshot] "
+		return (gettext("\tsend [-DnPpRve] [-[iI] snapshot] "
 		    "<snapshot>\n"
-		    "\tsend [-i snapshot|bookmark] "
+		    "\tsend [-e] [-i snapshot|bookmark] "
 		    "<filesystem|volume|snapshot>\n"));
 	case HELP_SET:
 		return (gettext("\tset <property=value> "
@@ -313,6 +318,10 @@ get_usage(zfs_help_t idx)
 	case HELP_DIFF:
 		return (gettext("\tdiff [-FHt] <snapshot> "
 		    "[snapshot|filesystem]\n"));
+	case HELP_MOOCH:
+		return (gettext("\tmooch -f <clone_file>=<origin_file> ... "
+		    "<clone_directory>\n"
+		    "\tmooch -d <clone_directory>\n"));
 	case HELP_BOOKMARK:
 		return (gettext("\tbookmark <snapshot> <bookmark>\n"));
 	}
@@ -573,6 +582,7 @@ finish_progress(char *done)
 	free(pt_header);
 	pt_header = NULL;
 }
+
 /*
  * zfs clone [-p] [-o prop=value] ... <snap> <fs | vol>
  *
@@ -2160,7 +2170,7 @@ zfs_do_upgrade(int argc, char **argv)
  *	-i	Translate SID to POSIX ID.
  *	-n	Print numeric ID instead of user/group name.
  *	-o      Control which fields to display.
- *	-p	Use exact (parsable) numeric output.
+ *	-p	Use exact (parseable) numeric output.
  *	-s      Specify sort columns, descending order.
  *	-S      Specify sort columns, ascending order.
  *	-t      Control which object types to display.
@@ -2838,19 +2848,19 @@ zfs_do_userspace(int argc, char **argv)
 }
 
 /*
- * list [-Hp][-r|-d max] [-o property[,...]] [-s property] ... [-S property] ...
- *      [-t type[,...]] [filesystem|volume|snapshot] ...
+ * list [-r][-d max] [-H] [-o property[,property]...] [-t type[,type]...]
+ *      [-s property [-s property]...] [-S property [-S property]...]
+ *      <dataset> ...
  *
- *	-H	Scripted mode; elide headers and separate columns by tabs.
- *	-p	Display values in parsable (literal) format.
- *	-r	Recurse over all children.
+ *	-r	Recurse over all children
  *	-d	Limit recursion by depth.
+ *	-H	Scripted mode; elide headers and separate columns by tabs
  *	-o	Control which fields to display.
+ *	-t	Control which object types to display.
  *	-s	Specify sort columns, descending order.
  *	-S	Specify sort columns, ascending order.
- *	-t	Control which object types to display.
  *
- * When given no arguments, list all filesystems in the system.
+ * When given no arguments, lists all filesystems in the system.
  * Otherwise, list the specified datasets, optionally recursing down them if
  * '-r' is specified.
  */
@@ -2865,7 +2875,7 @@ typedef struct list_cbdata {
  * Given a list of columns to display, output appropriate headers for each one.
  */
 static void
-print_header(list_cbdata_t *cb)
+print_header(zprop_list_t *pl)
 {
 	zprop_list_t *pl = cb->cb_proplist;
 	char headerbuf[ZFS_MAXPROPLEN];
@@ -2908,7 +2918,7 @@ print_header(list_cbdata_t *cb)
  * to the described layout.
  */
 static void
-print_dataset(zfs_handle_t *zhp, list_cbdata_t *cb)
+print_dataset(zfs_handle_t *zhp, zprop_list_t *pl, boolean_t scripted)
 {
 	zprop_list_t *pl = cb->cb_proplist;
 	boolean_t first = B_TRUE;
@@ -2917,10 +2927,11 @@ print_dataset(zfs_handle_t *zhp, list_cbdata_t *cb)
 	nvlist_t *propval;
 	char *propstr;
 	boolean_t right_justify;
+	int width;
 
 	for (; pl != NULL; pl = pl->pl_next) {
 		if (!first) {
-			if (cb->cb_scripted)
+			if (scripted)
 				(void) printf("\t");
 			else
 				(void) printf("  ");
@@ -2960,17 +2971,19 @@ print_dataset(zfs_handle_t *zhp, list_cbdata_t *cb)
 			right_justify = B_FALSE;
 		}
 
+		width = pl->pl_width;
+
 		/*
 		 * If this is being called in scripted mode, or if this is the
 		 * last column and it is left-justified, don't include a width
 		 * format specifier.
 		 */
-		if (cb->cb_scripted || (pl->pl_next == NULL && !right_justify))
+		if (scripted || (pl->pl_next == NULL && !right_justify))
 			(void) printf("%s", propstr);
 		else if (right_justify)
-			(void) printf("%*s", pl->pl_width, propstr);
+			(void) printf("%*s", width, propstr);
 		else
-			(void) printf("%-*s", pl->pl_width, propstr);
+			(void) printf("%-*s", width, propstr);
 	}
 
 	(void) printf("\n");
@@ -2986,11 +2999,11 @@ list_callback(zfs_handle_t *zhp, void *data)
 
 	if (cbp->cb_first) {
 		if (!cbp->cb_scripted)
-			print_header(cbp);
+			print_header(cbp->cb_proplist);
 		cbp->cb_first = B_FALSE;
 	}
 
-	print_dataset(zhp, cbp);
+	print_dataset(zhp, cbp->cb_proplist, cbp->cb_scripted);
 
 	return (0);
 }
@@ -2999,6 +3012,7 @@ static int
 zfs_do_list(int argc, char **argv)
 {
 	int c;
+	boolean_t scripted = B_FALSE;
 	static char default_fields[] =
 	    "name,used,available,referenced,mountpoint";
 	int types = ZFS_TYPE_DATASET;
@@ -3012,7 +3026,7 @@ zfs_do_list(int argc, char **argv)
 	int flags = ZFS_ITER_PROP_LISTSNAPS | ZFS_ITER_ARGS_CAN_BE_PATHS;
 
 	/* check options */
-	while ((c = getopt(argc, argv, "HS:d:o:prs:t:")) != -1) {
+	while ((c = getopt(argc, argv, ":d:o:rt:Hs:S:")) != -1) {
 		switch (c) {
 		case 'o':
 			fields = optarg;
@@ -3028,7 +3042,7 @@ zfs_do_list(int argc, char **argv)
 			flags |= ZFS_ITER_RECURSE;
 			break;
 		case 'H':
-			cb.cb_scripted = B_TRUE;
+			scripted = B_TRUE;
 			break;
 		case 's':
 			if (zfs_add_sort_column(&sortcol, optarg,
@@ -3052,7 +3066,7 @@ zfs_do_list(int argc, char **argv)
 			flags &= ~ZFS_ITER_PROP_LISTSNAPS;
 			while (*optarg != '\0') {
 				static char *type_subopts[] = { "filesystem",
-				    "volume", "snapshot", "snap", "bookmark",
+				    "volume", "snapshot", "bookmark",
 				    "all", NULL };
 
 				switch (getsubopt(&optarg, type_subopts,
@@ -3064,13 +3078,12 @@ zfs_do_list(int argc, char **argv)
 					types |= ZFS_TYPE_VOLUME;
 					break;
 				case 2:
-				case 3:
 					types |= ZFS_TYPE_SNAPSHOT;
 					break;
-				case 4:
+				case 3:
 					types |= ZFS_TYPE_BOOKMARK;
 					break;
-				case 5:
+				case 4:
 					types = ZFS_TYPE_DATASET |
 					    ZFS_TYPE_BOOKMARK;
 					break;
@@ -3115,6 +3128,7 @@ zfs_do_list(int argc, char **argv)
 	    != 0)
 		usage(B_FALSE);
 
+	cb.cb_scripted = scripted;
 	cb.cb_first = B_TRUE;
 
 	ret = zfs_for_each(argc, argv, flags, types, sortcol, &cb.cb_proplist,
@@ -3299,6 +3313,7 @@ rollback_check_dependent(zfs_handle_t *zhp, void *data)
 	zfs_close(zhp);
 	return (0);
 }
+
 /*
  * Report any snapshots more recent than the one specified.  Used when '-r' is
  * not specified.  We reuse this same callback for the snapshot dependents - if
@@ -3638,7 +3653,7 @@ zfs_do_send(int argc, char **argv)
 	boolean_t extraverbose = B_FALSE;
 
 	/* check options */
-	while ((c = getopt(argc, argv, ":i:I:RDpvnP")) != -1) {
+	while ((c = getopt(argc, argv, ":i:I:RDpvnPe")) != -1) {
 		switch (c) {
 		case 'i':
 			if (fromname)
@@ -3672,6 +3687,9 @@ zfs_do_send(int argc, char **argv)
 			break;
 		case 'n':
 			flags.dryrun = B_TRUE;
+			break;
+		case 'e':
+			flags.embed_data = B_TRUE;
 			break;
 		case ':':
 			(void) fprintf(stderr, gettext("missing argument for "
@@ -3711,6 +3729,7 @@ zfs_do_send(int argc, char **argv)
 	if (strchr(argv[0], '@') == NULL ||
 	    (fromname && strchr(fromname, '#') != NULL)) {
 		char frombuf[ZFS_MAXNAMELEN];
+		enum lzc_send_flags lzc_flags = 0;
 
 		if (flags.replicate || flags.doall || flags.props ||
 		    flags.dedup || flags.dryrun || flags.verbose ||
@@ -3725,6 +3744,9 @@ zfs_do_send(int argc, char **argv)
 		if (zhp == NULL)
 			return (1);
 
+		if (flags.embed_data)
+			lzc_flags |= LZC_SEND_FLAG_EMBED_DATA;
+
 		if (fromname != NULL &&
 		    (fromname[0] == '#' || fromname[0] == '@')) {
 			/*
@@ -3738,7 +3760,7 @@ zfs_do_send(int argc, char **argv)
 			(void) strlcat(frombuf, fromname, sizeof (frombuf));
 			fromname = frombuf;
 		}
-		err = zfs_send_one(zhp, fromname, STDOUT_FILENO);
+		err = zfs_send_one(zhp, fromname, STDOUT_FILENO, lzc_flags);
 		zfs_close(zhp);
 		return (err != 0);
 	}
@@ -6399,12 +6421,18 @@ manual_mount(int argc, char **argv)
 	int c;
 	int flags = 0;
 	char *dataset, *path;
+	boolean_t ignoremp = B_FALSE;
 
 	/* check options */
 	while ((c = getopt(argc, argv, ":mo:O")) != -1) {
 		switch (c) {
 		case 'o':
-			(void) strlcpy(mntopts, optarg, sizeof (mntopts));
+			if (strcmp(optarg, "ignoremountpoint") == 0) {
+				ignoremp = B_TRUE;
+			} else {
+				(void) strlcpy(mntopts, optarg,
+				    sizeof (mntopts));
+			}
 			break;
 		case 'O':
 			flags |= MS_OVERLAY;
@@ -6453,9 +6481,12 @@ manual_mount(int argc, char **argv)
 	(void) zfs_prop_get(zhp, ZFS_PROP_MOUNTPOINT, mountpoint,
 	    sizeof (mountpoint), NULL, NULL, 0, B_FALSE);
 
-	/* check for legacy mountpoint and complain appropriately */
+	/*
+	 * Unless we're explicitly forced by the user, check for legacy
+	 * mountpoint and complain appropriately.
+	 */
 	ret = 0;
-	if (strcmp(mountpoint, ZFS_MOUNTPOINT_LEGACY) == 0) {
+	if (ignoremp || strcmp(mountpoint, ZFS_MOUNTPOINT_LEGACY) == 0) {
 		if (mount(dataset, path, MS_OPTIONSTR | flags, MNTTYPE_ZFS,
 		    NULL, 0, mntopts, sizeof (mntopts)) != 0) {
 			(void) fprintf(stderr, gettext("mount failed: %s\n"),
@@ -6468,7 +6499,9 @@ manual_mount(int argc, char **argv)
 		(void) fprintf(stderr, gettext("Use 'zfs set mountpoint=%s' "
 		    "instead.\n"), path);
 		(void) fprintf(stderr, gettext("If you must use 'mount -F zfs' "
-		    "or /etc/vfstab, use 'zfs set mountpoint=legacy'.\n"));
+		    "or /etc/vfstab, use 'zfs set mountpoint=legacy'\n"));
+		(void) fprintf(stderr, gettext("or specify '-o "
+		    "ignoremountpoint'.\n"));
 		(void) fprintf(stderr, gettext("See zfs(1M) for more "
 		    "information.\n"));
 		ret = 1;
@@ -6608,6 +6641,126 @@ zfs_do_diff(int argc, char **argv)
 	err = zfs_show_diffs(zhp, STDOUT_FILENO, fromsnap, tosnap, flags);
 
 	zfs_close(zhp);
+
+	return (err != 0);
+}
+
+/*
+ * mooch -f <clone_file>=<origin_file> ... <clone_directory>
+ * mooch -d <clone_directory>
+ *
+ * Establishes a "mooch mapping".  This feature allows for very compact
+ * representation of files which are byteswapped versions of other
+ * files.  The workflow for this use case is as follows:
+ *
+ * Write files.
+ * Create snapshot.
+ * Create clone of snapshot.
+ * Establish mooch mapping.
+ * Create files which will be byteswapped versions of files from origin.
+ * Write byteswaped files.
+ * Remove mooch mapping.
+ *
+ * Note that ZFS does not create or fill in the byteswapped files, it
+ * simply stores their contents more compactly.  Files must be byte
+ * swapped in an application-dependent way.  The common use case is for
+ * database files, which are stored in endian-specific formats but can
+ * be converted to different endianness by the database software.
+ *
+ * The "mooch mapping" indicates that when a file with the name
+ * clone_file is created in the clone_directory, it will be a
+ * byteswapped version of the origin_file.  The origin_file should be
+ * the path to the file in the origin snapshot, e.g.
+ * /pool/origin_fs/.zfs/snapshot/origin_snap/filename.
+ *
+ * The mooch mapping for a directory is removed by using the -d flag.
+ *
+ * The mooch_byteswap pool feature must be enabled to use this
+ * subcommand.
+ */
+static int
+zfs_do_mooch(int argc, char **argv)
+{
+	const char *dir_name;
+	int err, fd;
+	nvlist_t *files = fnvlist_alloc();
+	boolean_t delete = B_FALSE;
+	char c;
+
+	while ((c = getopt(argc, argv, ":f:d")) != -1) {
+		switch (c) {
+		case 'f': {
+			char *filename = optarg;
+			char *origin_filename;
+
+			origin_filename = strchr(filename, '=');
+			if (origin_filename == NULL) {
+				(void) fprintf(stderr, gettext("missing "
+				    "'=' for -f option\n"));
+				return (-1);
+			}
+			*origin_filename = '\0';
+			origin_filename++;
+			uint64_t ino;
+			err = zfs_get_inode(origin_filename, &ino);
+			if (err != 0) {
+				(void) fprintf(stderr,
+				    gettext("can't stat file %s: %s\n"),
+				    origin_filename, strerror(err));
+				return (1);
+			}
+			fnvlist_add_uint64(files, filename, ino);
+			break;
+		}
+		case 'd':
+			delete = B_TRUE;
+			break;
+		case '?':
+			(void) fprintf(stderr, gettext("invalid option '%c'\n"),
+			    optopt);
+			usage(B_FALSE);
+		}
+	}
+
+	argc -= optind;
+	argv += optind;
+
+	/* check number of arguments */
+	if (argc != 1) {
+		(void) fprintf(stderr,
+		gettext("wrong number of arguments\n"));
+		usage(B_FALSE);
+	}
+
+	dir_name = argv[0];
+
+	fd = open(dir_name, O_RDONLY);
+	if (fd == -1) {
+		(void) fprintf(stderr, gettext("can't open directory %s: %s\n"),
+		    dir_name, strerror(errno));
+		return (1);
+	}
+
+	if (delete)
+		err = zfs_mooch_byteswap(fd, NULL);
+	else
+		err = zfs_mooch_byteswap(fd, files);
+	if (err != 0) {
+		(void) fprintf(stderr, gettext("can't mooch: %s\n"),
+		    strerror(err));
+	}
+
+	if (err == 0) {
+		(void) printf("mapping established for directory %s.\n"
+		    "create files now.  hit ^c when finished\n",
+		    dir_name);
+
+		/* CONSTCOND */
+		while (B_TRUE)
+			(void) sleep(10);
+	}
+
+	(void) close(fd);
 
 	return (err != 0);
 }

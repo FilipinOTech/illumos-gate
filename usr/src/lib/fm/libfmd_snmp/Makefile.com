@@ -18,9 +18,18 @@
 #
 # CDDL HEADER END
 #
+
 #
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+#
+
+#
+# Copyright (c) 2013 by Delphix. All rights reserved.
+#
+
+#
+# Copyright (c) 2013 OmniTI Computer Consulting, Inc. All rights reserved.
 #
 
 LIBRARY = libfmd_snmp.a
@@ -44,13 +53,15 @@ LIBS = $(DYNLIB) $(LINTLIB)
 
 SRCDIR =	../common
 
+C99MODE = $(C99_ENABLE)
+
 CPPFLAGS += -I../common -I.
 $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 CFLAGS += $(CCVERBOSE) $(C_BIGPICFLAGS)
 CFLAGS64 += $(CCVERBOSE) $(C_BIGPICFLAGS)
 
 # No lint libraries are delivered for Net-SNMP yet
-SNMPLIBS = -lnetsnmp -lnetsnmphelpers -lnetsnmpagent
+SNMPLIBS = -lnetsnmp -lnetsnmpagent
 lint := SNMPLIBS=
 
 LDLIBS += $(MACH_LDLIBS)

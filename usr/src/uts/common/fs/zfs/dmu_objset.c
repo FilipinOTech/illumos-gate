@@ -47,6 +47,7 @@
 #include <sys/sa.h>
 #include <sys/zfs_onexit.h>
 #include <sys/dsl_destroy.h>
+#include <sys/dmu_send.h>
 
 /*
  * Needed to close a window in dnode_move() that allows the objset to be freed
@@ -338,7 +339,7 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 	 * default (fletcher2/off).  Snapshots don't need to know about
 	 * checksum/compression/copies.
 	 */
-	if (ds) {
+	if (ds != NULL) {
 		err = dsl_prop_register(ds,
 		    zfs_prop_to_name(ZFS_PROP_PRIMARYCACHE),
 		    primary_cache_changed_cb, os);
@@ -391,7 +392,7 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 			kmem_free(os, sizeof (objset_t));
 			return (err);
 		}
-	} else if (ds == NULL) {
+	} else {
 		/* It's the meta-objset. */
 		os->os_checksum = ZIO_CHECKSUM_FLETCHER_4;
 		os->os_compress = ZIO_COMPRESS_LZJB;
@@ -435,17 +436,6 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 		    &os->os_groupused_dnode);
 	}
 
-	/*
-	 * We should be the only thread trying to do this because we
-	 * have ds_opening_lock
-	 */
-	if (ds) {
-		mutex_enter(&ds->ds_lock);
-		ASSERT(ds->ds_objset == NULL);
-		ds->ds_objset = os;
-		mutex_exit(&ds->ds_lock);
-	}
-
 	*osp = os;
 	return (0);
 }
@@ -456,13 +446,100 @@ dmu_objset_from_ds(dsl_dataset_t *ds, objset_t **osp)
 	int err = 0;
 
 	mutex_enter(&ds->ds_opening_lock);
-	*osp = ds->ds_objset;
-	if (*osp == NULL) {
+	if (ds->ds_objset == NULL) {
+		objset_t *os;
 		err = dmu_objset_open_impl(dsl_dataset_get_spa(ds),
-		    ds, dsl_dataset_get_blkptr(ds), osp);
+		    ds, dsl_dataset_get_blkptr(ds), &os);
+
+		if (err == 0) {
+			mutex_enter(&ds->ds_lock);
+			ASSERT(ds->ds_objset == NULL);
+			ds->ds_objset = os;
+			mutex_exit(&ds->ds_lock);
+		}
 	}
+	*osp = ds->ds_objset;
 	mutex_exit(&ds->ds_opening_lock);
 	return (err);
+}
+
+/*
+ * Set clone->os_origin_mooch_objset if it is not already set.
+ */
+static int
+dmu_objset_mooch_origin_impl(objset_t *clone)
+{
+	objset_t *origin, *origin_mooch_objset;
+	dsl_dataset_t *origin_ds;
+	int err;
+
+	ASSERT(dsl_pool_config_held(dmu_objset_pool(clone)));
+	ASSERT(clone->os_dsl_dataset->ds_mooch_byteswap);
+
+	if (clone->os_origin_mooch_objset != NULL)
+		return (0);
+
+	err = dsl_dataset_hold_obj(dmu_objset_pool(clone),
+	    clone->os_dsl_dataset->ds_dir->dd_phys->dd_origin_obj,
+	    FTAG, &origin_ds);
+	if (err != 0)
+		return (err);
+	err = dmu_objset_from_ds(origin_ds, &origin);
+	if (err != 0) {
+		dsl_dataset_rele(origin_ds, FTAG);
+		return (err);
+	}
+	if (origin_ds->ds_mooch_byteswap) {
+		err = dmu_objset_mooch_origin_impl(origin);
+		origin_mooch_objset = origin->os_origin_mooch_objset;
+	} else {
+		origin_mooch_objset = origin;
+	}
+	if (err == 0) {
+		mutex_enter(&clone->os_lock);
+		/*
+		 * Another thread may have beat us to setting
+		 * os_origin_mooch_objset. Re-check now that we have the lock.
+		 */
+		if (clone->os_origin_mooch_objset == NULL) {
+			clone->os_origin_mooch_objset = origin_mooch_objset;
+			dmu_buf_add_ref(clone->os_origin_mooch_objset->
+			    os_dsl_dataset->ds_dbuf, clone);
+		}
+		mutex_exit(&clone->os_lock);
+	}
+	dsl_dataset_rele(origin_ds, FTAG);
+	return (err);
+}
+
+/*
+ * Return the "mooch origin" of this objset.  This is the snapshot that
+ * we mooch from for MOOCH_BYTESWAP.  Typically it is simply our origin, but
+ * it may be our origin's origin, etc.  We find it by walking up the chain
+ * of origins until we find an origin that does not have
+ * ds_mooch_byteswap set.
+ */
+int
+dmu_objset_mooch_origin(objset_t *clone, objset_t **originp)
+{
+	int err = 0;
+
+	ASSERT(clone->os_dsl_dataset->ds_mooch_byteswap);
+
+	/*
+	 * os_origin_mooch_objset is never cleared, so if it's already set,
+	 * we can safely return it without grabbing the lock.
+	 */
+	if (clone->os_origin_mooch_objset == NULL) {
+		dsl_pool_t *dp = dmu_objset_pool(clone);
+
+		dsl_pool_config_enter(dp, FTAG);
+		err = dmu_objset_mooch_origin_impl(clone);
+		dsl_pool_config_exit(dp, FTAG);
+	}
+	*originp = clone->os_origin_mooch_objset;
+	return (err);
+
 }
 
 /*
@@ -652,6 +729,11 @@ dmu_objset_evict(objset_t *os)
 		VERIFY0(dsl_prop_unregister(ds,
 		    zfs_prop_to_name(ZFS_PROP_SECONDARYCACHE),
 		    secondary_cache_changed_cb, os));
+	}
+
+	if (os->os_origin_mooch_objset != NULL) {
+		dsl_dataset_rele(os->os_origin_mooch_objset->os_dsl_dataset,
+		    os);
 	}
 
 	if (os->os_sa)
@@ -986,6 +1068,7 @@ dmu_objset_write_ready(zio_t *zio, arc_buf_t *abuf, void *arg)
 	objset_t *os = arg;
 	dnode_phys_t *dnp = &os->os_phys->os_meta_dnode;
 
+	ASSERT(!BP_IS_EMBEDDED(bp));
 	ASSERT3P(bp, ==, os->os_rootbp);
 	ASSERT3U(BP_GET_TYPE(bp), ==, DMU_OT_OBJSET);
 	ASSERT0(BP_GET_LEVEL(bp));
@@ -998,7 +1081,7 @@ dmu_objset_write_ready(zio_t *zio, arc_buf_t *abuf, void *arg)
 	 */
 	bp->blk_fill = 0;
 	for (int i = 0; i < dnp->dn_nblkptr; i++)
-		bp->blk_fill += dnp->dn_blkptr[i].blk_fill;
+		bp->blk_fill += BP_GET_FILL(&dnp->dn_blkptr[i]);
 }
 
 /* ARGSUSED */
@@ -1117,11 +1200,39 @@ dmu_objset_is_dirty(objset_t *os, uint64_t txg)
 }
 
 static objset_used_cb_t *used_cbs[DMU_OST_NUMTYPES];
+static objset_mooch_cb_t *mooch_cbs[DMU_OST_NUMTYPES];
 
 void
-dmu_objset_register_type(dmu_objset_type_t ost, objset_used_cb_t *cb)
+dmu_objset_register_type(dmu_objset_type_t ost, objset_used_cb_t *used_cb,
+    objset_mooch_cb_t *mooch_cb)
 {
-	used_cbs[ost] = cb;
+	used_cbs[ost] = used_cb;
+	mooch_cbs[ost] = mooch_cb;
+}
+
+int
+dmu_objset_mooch_obj_refd(objset_t *os, uint64_t obj, uint64_t *objp)
+{
+	objset_mooch_cb_t *cb = mooch_cbs[os->os_phys->os_type];
+	if (DMU_OBJECT_IS_SPECIAL(obj))
+		return (SET_ERROR(ENOENT));
+
+	/*
+	 * We can not set dn_origin_obj_refd while receiving, because we
+	 * may not have received the ZFS_MOOCH_BYTESWAP_MAP yet.  Ignoring
+	 * the mooch map preserves the invariant that user data is not read
+	 * during receive, which in turn ensures that we do not need
+	 * to know the mooch_obj_refd during receive.  After receiving,
+	 * the objset is evicted, so subsequent accesses will re-create
+	 * the dnodes and find the correct origin_obj_refd.
+	 */
+	if (dmu_objset_is_receiving(os))
+		return (SET_ERROR(ENOENT));
+
+	if (cb == NULL)
+		return (SET_ERROR(ENOENT));
+	else
+		return (cb(os, obj, objp));
 }
 
 boolean_t
