@@ -173,8 +173,8 @@ zpool_feature_init(void)
 
 	zfeature_register(SPA_FEATURE_MULTI_VDEV_CRASH_DUMP,
 	    "com.joyent:multi_vdev_crash_dump", "multi_vdev_crash_dump",
-	    "Crash dumps to multiple vdev pools.", B_FALSE, B_FALSE, B_FALSE,
-	    NULL);
+	    "Crash dumps to multiple vdev pools.", B_FALSE, B_FALSE,
+	    B_FALSE, NULL);
 
 	zfeature_register(SPA_FEATURE_SPACEMAP_HISTOGRAM,
 	    "com.delphix:spacemap_histogram", "spacemap_histogram",
@@ -220,4 +220,13 @@ zpool_feature_init(void)
 	    "com.delphix:mooch_byteswap", "mooch_byteswap",
 	    "Clones can store byteswapped user data using 1% the space.",
 	    B_FALSE, B_FALSE, B_FALSE, mooch_byteswap_deps);
+
+	static const spa_feature_t filesystem_limits_deps[] = {
+	    SPA_FEATURE_EXTENSIBLE_DATASET,
+	    SPA_FEATURE_NONE
+	};
+	zfeature_register(SPA_FEATURE_FS_SS_LIMIT,
+	    "com.joyent:filesystem_limits", "filesystem_limits",
+	    "Filesystem and snapshot limits.", B_TRUE, B_FALSE, B_FALSE,
+	    filesystem_limits_deps);
 }

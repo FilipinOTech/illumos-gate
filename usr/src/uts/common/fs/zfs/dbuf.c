@@ -183,6 +183,7 @@ dbuf_hash_insert(dmu_buf_impl_t *db)
 
 /*
  * Remove an entry from the hash table.  It must be in the EVICTING state.
+ * This operation will fail if there are any existing holds on the db.
  */
 static void
 dbuf_hash_remove(dmu_buf_impl_t *db)
@@ -1521,9 +1522,10 @@ dbuf_override_impl(dmu_buf_impl_t *db, const blkptr_t *bp, dmu_tx_t *tx)
 	dl->dr_overridden_by.blk_birth = db->db_last_dirty->dr_txg;
 }
 
+#pragma weak dmu_buf_fill_done = dbuf_fill_done
 /* ARGSUSED */
 void
-dmu_buf_fill_done(dmu_buf_t *dbuf, dmu_tx_t *tx)
+dbuf_fill_done(dmu_buf_impl_t *db, dmu_tx_t *tx)
 {
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbuf;
 	uint64_t refd_obj;
@@ -1588,6 +1590,7 @@ dmu_buf_write_embedded(dmu_buf_t *dbuf, void *data,
     dmu_tx_t *tx)
 {
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbuf;
+	struct dirty_leaf *dl;
 	dmu_object_type_t type;
 
 	if (etype == BP_EMBEDDED_TYPE_DATA) {
@@ -1609,12 +1612,17 @@ dmu_buf_write_embedded(dmu_buf_t *dbuf, void *data,
 	dmu_buf_will_not_fill(dbuf, tx);
 
 	blkptr_t bp;
-	encode_embedded_bp_compressed(&bp,
+	ASSERT3U(db->db_last_dirty->dr_txg, ==, tx->tx_txg);
+	dl = &db->db_last_dirty->dt.dl;
+	encode_embedded_bp_compressed(&dl->dr_overridden_by,
 	    data, comp, uncompressed_size, compressed_size);
-	BPE_SET_ETYPE(&bp, etype);
-	BP_SET_TYPE(&bp, type);
-	BP_SET_LEVEL(&bp, 0);
-	BP_SET_BYTEORDER(&bp, byteorder);
+	BPE_SET_ETYPE(&dl->dr_overridden_by, etype);
+	BP_SET_TYPE(&dl->dr_overridden_by, type);
+	BP_SET_LEVEL(&dl->dr_overridden_by, 0);
+	BP_SET_BYTEORDER(&dl->dr_overridden_by, byteorder);
+
+	dl->dr_override_state = DR_OVERRIDDEN;
+	dl->dr_overridden_by.blk_birth = db->db_last_dirty->dr_txg;
 
 	dbuf_override_impl(db, &bp, tx);
 }
