@@ -240,8 +240,6 @@ spa_prop_get_config(spa_t *spa, nvlist_t **nvp)
 	}
 
 	if (pool != NULL) {
-		dsl_dir_t *freedir = pool->dp_free_dir;
-
 		/*
 		 * The $FREE directory was introduced in SPA_VERSION_DEADLISTS,
 		 * when opening pools before this version freedir will be NULL.
@@ -5265,11 +5263,6 @@ spa_vdev_remove(spa_t *spa, uint64_t guid, boolean_t unspare)
 	} else if (vd != NULL && vd->vdev_islog) {
 		ASSERT(!locked);
 		ASSERT(vd == vd->vdev_top);
-
-		/*
-		 * XXX - Once we have bp-rewrite this should
-		 * become the common case.
-		 */
 
 		mg = vd->vdev_mg;
 

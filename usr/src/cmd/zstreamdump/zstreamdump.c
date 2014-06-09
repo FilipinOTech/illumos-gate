@@ -49,7 +49,6 @@
  */
 #define	DUMP_GROUPING	4
 
-uint64_t drr_record_count[DRR_NUMTYPES];
 uint64_t total_write_size = 0;
 uint64_t total_stream_len = 0;
 FILE *send_stream = 0;
@@ -569,13 +568,7 @@ main(int argc, char *argv[])
 	(void) printf("\tTotal DRR_SPILL records = %lld\n",
 	    (u_longlong_t)drr_record_count[DRR_SPILL]);
 	(void) printf("\tTotal records = %lld\n",
-	    (u_longlong_t)(drr_record_count[DRR_BEGIN] +
-	    drr_record_count[DRR_OBJECT] +
-	    drr_record_count[DRR_FREEOBJECTS] +
-	    drr_record_count[DRR_WRITE] +
-	    drr_record_count[DRR_FREE] +
-	    drr_record_count[DRR_SPILL] +
-	    drr_record_count[DRR_END]));
+	    (u_longlong_t)total_records);
 	(void) printf("\tTotal write size = %lld (0x%llx)\n",
 	    (u_longlong_t)total_write_size, (u_longlong_t)total_write_size);
 	(void) printf("\tTotal stream length = %lld (0x%llx)\n",

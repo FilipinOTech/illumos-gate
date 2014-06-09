@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011, 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2011, 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
  * Copyright (c) 2013, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2014 by Saso Kiselkov. All rights reserved.
@@ -1502,7 +1502,7 @@ arc_buf_data_free(arc_buf_t *buf, void (*free_func)(void *, size_t))
  * arc_buf_t off of the the arc_buf_hdr_t's list and free it.
  */
 static void
-arc_buf_destroy(arc_buf_t *buf, boolean_t recycle, boolean_t remove)
+arc_buf_destroy(arc_buf_t *buf, boolean_t recycle, boolean_t all)
 {
 	arc_buf_t **bufp;
 
@@ -1553,7 +1553,7 @@ arc_buf_destroy(arc_buf_t *buf, boolean_t recycle, boolean_t remove)
 	}
 
 	/* only remove the buf if requested */
-	if (!remove)
+	if (!all)
 		return;
 
 	/* remove the buf from the hdr list */
@@ -1598,6 +1598,8 @@ arc_hdr_destroy(arc_buf_hdr_t *hdr)
 			list_remove(l2hdr->b_dev->l2ad_buflist, hdr);
 			ARCSTAT_INCR(arcstat_l2_size, -hdr->b_size);
 			ARCSTAT_INCR(arcstat_l2_asize, -l2hdr->b_asize);
+			vdev_space_update(l2hdr->b_dev->l2ad_vdev,
+			    -l2hdr->b_asize, 0, 0);
 			kmem_free(l2hdr, sizeof (l2arc_buf_hdr_t));
 			if (hdr->b_state == arc_l2c_only)
 				l2arc_hdr_stat_remove();
@@ -3253,6 +3255,10 @@ arc_freed(spa_t *spa, const blkptr_t *bp)
  * will remain cached in the ARC. We make a copy of the arc buffer here so
  * that we can process the callback without holding any locks.
  *
+ * This is used by the DMU to let the ARC know that a buffer is
+ * being evicted, so the ARC should clean up.  If this arc buf
+ * is not yet in the evicted state, it will be put there.
+ *
  * It's possible that the callback is already in the process of being cleared
  * by another thread.  In this case we can not clear the callback.
  *
@@ -3327,7 +3333,7 @@ arc_clear_callback(arc_buf_t *buf)
 		mutex_exit(&evicted_state->arcs_mtx);
 		mutex_exit(&old_state->arcs_mtx);
 	}
-
+	mutex_exit(hash_lock);
 	if (hdr->b_datacnt > 1) {
 		mutex_exit(&buf->b_evict_lock);
 		arc_buf_destroy(buf, FALSE, TRUE);
@@ -3336,7 +3342,6 @@ arc_clear_callback(arc_buf_t *buf)
 		hdr->b_flags |= ARC_BUF_AVAILABLE;
 		mutex_exit(&buf->b_evict_lock);
 	}
-	mutex_exit(hash_lock);
 	VERIFY(buf->b_efunc(buf) == 0 || efunc(private) == 0);
 	buf->b_efunc = NULL;
 	buf->b_private = NULL;
@@ -3470,6 +3475,8 @@ arc_release(arc_buf_t *buf, void *tag)
 
 	if (l2hdr) {
 		ARCSTAT_INCR(arcstat_l2_asize, -l2hdr->b_asize);
+		vdev_space_update(l2hdr->b_dev->l2ad_vdev,
+		    -l2hdr->b_asize, 0, 0);
 		list_remove(l2hdr->b_dev->l2ad_buflist, hdr);
 		kmem_free(l2hdr, sizeof (l2arc_buf_hdr_t));
 		ARCSTAT_INCR(arcstat_l2_size, -buf_size);
@@ -4267,6 +4274,7 @@ l2arc_write_done(zio_t *zio)
 	arc_buf_hdr_t *head, *ab, *ab_prev;
 	l2arc_buf_hdr_t *abl2;
 	kmutex_t *hash_lock;
+	int64_t bytes_dropped = 0;
 
 	cb = zio->io_private;
 	ASSERT(cb != NULL);
@@ -4314,6 +4322,7 @@ l2arc_write_done(zio_t *zio)
 			 */
 			list_remove(buflist, ab);
 			ARCSTAT_INCR(arcstat_l2_asize, -abl2->b_asize);
+			bytes_dropped += abl2->b_asize;
 			ab->b_l2hdr = NULL;
 			kmem_free(abl2, sizeof (l2arc_buf_hdr_t));
 			ARCSTAT_INCR(arcstat_l2_size, -ab->b_size);
@@ -4331,6 +4340,8 @@ l2arc_write_done(zio_t *zio)
 	list_remove(buflist, head);
 	kmem_cache_free(hdr_cache, head);
 	mutex_exit(&l2arc_buflist_mtx);
+
+	vdev_space_update(dev->l2ad_vdev, -bytes_dropped, 0, 0);
 
 	l2arc_do_free_on_write();
 
@@ -4470,6 +4481,7 @@ l2arc_evict(l2arc_dev_t *dev, uint64_t distance, boolean_t all)
 	arc_buf_hdr_t *ab, *ab_prev;
 	kmutex_t *hash_lock;
 	uint64_t taddr;
+	int64_t bytes_evicted = 0;
 
 	buflist = dev->l2ad_buflist;
 
@@ -4568,6 +4580,7 @@ top:
 			if (ab->b_l2hdr != NULL) {
 				abl2 = ab->b_l2hdr;
 				ARCSTAT_INCR(arcstat_l2_asize, -abl2->b_asize);
+				bytes_evicted += abl2->b_asize;
 				ab->b_l2hdr = NULL;
 				kmem_free(abl2, sizeof (l2arc_buf_hdr_t));
 				ARCSTAT_INCR(arcstat_l2_size, -ab->b_size);
@@ -4584,7 +4597,7 @@ top:
 	}
 	mutex_exit(&l2arc_buflist_mtx);
 
-	vdev_space_update(dev->l2ad_vdev, -(taddr - dev->l2ad_evict), 0, 0);
+	vdev_space_update(dev->l2ad_vdev, -bytes_evicted, 0, 0);
 	dev->l2ad_evict = taddr;
 }
 
@@ -4827,7 +4840,7 @@ l2arc_write_buffers(spa_t *spa, l2arc_dev_t *dev, uint64_t target_sz,
 	ARCSTAT_INCR(arcstat_l2_write_bytes, write_asize);
 	ARCSTAT_INCR(arcstat_l2_size, write_sz);
 	ARCSTAT_INCR(arcstat_l2_asize, write_asize);
-	vdev_space_update(dev->l2ad_vdev, write_psize, 0, 0);
+	vdev_space_update(dev->l2ad_vdev, write_asize, 0, 0);
 
 	/*
 	 * Bump device hand to the device start if it is approaching the end.

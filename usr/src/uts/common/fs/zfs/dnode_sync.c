@@ -239,8 +239,6 @@ free_verify(dmu_buf_impl_t *db, uint64_t start, uint64_t end, dmu_tx_t *tx)
 }
 #endif
 
-#define	ALL -1
-
 static void
 free_children(dmu_buf_impl_t *db, uint64_t blkid, uint64_t nblks,
     dmu_tx_t *tx)

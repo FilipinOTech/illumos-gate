@@ -497,6 +497,7 @@ backup_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 		arc_buf_t *abuf;
 		int blksz = dnp->dn_datablkszsec << SPA_MINBLOCKSHIFT;
 
+		ASSERT3U(blksz, ==, dnp->dn_datablkszsec << SPA_MINBLOCKSHIFT);
 		ASSERT0(zb->zb_level);
 
 		if (BP_IS_EMBEDDED(bp) &&
@@ -592,20 +593,22 @@ dmu_send_impl(void *tag, dsl_pool_t *dp, dsl_dataset_t *ds,
 	}
 #endif
 
-	if (embedok &&
-	    spa_feature_is_active(dp->dp_spa, SPA_FEATURE_EMBEDDED_DATA)) {
-		featureflags |= DMU_BACKUP_FEATURE_EMBED_DATA;
-		if (spa_feature_is_active(dp->dp_spa, SPA_FEATURE_LZ4_COMPRESS))
-			featureflags |= DMU_BACKUP_FEATURE_EMBED_DATA_LZ4;
-	}
-
 	/*
 	 * Note: If we are sending a full stream (non-incremental), then
 	 * we can not send mooch records, because the receiver won't have
 	 * the origin to mooch from.
 	 */
-	if (embedok && ds->ds_mooch_byteswap && fromzb != NULL) {
-		featureflags |= DMU_BACKUP_FEATURE_EMBED_MOOCH_BYTESWAP;
+	if (embedok) {
+		if (ds->ds_mooch_byteswap && fromzb != NULL) {
+			featureflags |= DMU_BACKUP_FEATURE_EMBED_MOOCH_BYTESWAP;
+		}
+		if (spa_feature_is_active(dp->dp_spa, SPA_FEATURE_EMBEDDED_DATA)) {
+			featureflags |= DMU_BACKUP_FEATURE_EMBED_DATA;
+			if (spa_feature_is_active(dp->dp_spa, SPA_FEATURE_LZ4_COMPRESS))
+			featureflags |= DMU_BACKUP_FEATURE_EMBED_DATA_LZ4;
+		}
+	} else {
+		embedok = B_FALSE;
 	}
 
 	DMU_SET_FEATUREFLAGS(drr->drr_u.drr_begin.drr_versioninfo,
@@ -1011,6 +1014,19 @@ dmu_recv_begin_check(void *arg, dmu_tx_t *tx)
 	    !spa_feature_is_enabled(dp->dp_spa, SPA_FEATURE_LZ4_COMPRESS))
 		return (SET_ERROR(ENOTSUP));
 
+	/*
+	 * The receiving code doesn't know how to translate a WRITE_EMBEDDED
+	 * record to a plan WRITE record, so the pool must have the
+	 * EMBEDDED_DATA feature enabled if the stream has WRITE_EMBEDDED
+	 * records.  Same with WRITE_EMBEDDED records that use LZ4 compression.
+	 */
+	if ((featureflags & DMU_BACKUP_FEATURE_EMBED_DATA) &&
+	    !spa_feature_is_enabled(dp->dp_spa, SPA_FEATURE_EMBEDDED_DATA))
+		return (SET_ERROR(ENOTSUP));
+	if ((featureflags & DMU_BACKUP_FEATURE_EMBED_DATA_LZ4) &&
+	    !spa_feature_is_enabled(dp->dp_spa, SPA_FEATURE_LZ4_COMPRESS))
+		return (SET_ERROR(ENOTSUP));
+
 	error = dsl_dataset_hold(dp, tofs, FTAG, &ds);
 	if (error == 0) {
 		/* target fs already exists; recv into temp clone */
@@ -1134,7 +1150,6 @@ dmu_recv_begin_sync(void *arg, dmu_tx_t *tx)
 		dsl_dir_rele(dd, FTAG);
 		drba->drba_cookie->drc_newfs = B_TRUE;
 	}
-
 	VERIFY0(dsl_dataset_own_obj(dp, dsobj, dmu_recv_tag, &newds));
 
 	if ((DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo) &
