@@ -23,7 +23,7 @@
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2012 Nexenta Systems, Inc. All rights reserved.
 # Copyright (c) 2012, Joyent, Inc. All rights reserved.
-# Copyright (c) 2012, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright (c) 2012 OmniTI Computer Consulting, Inc. All rights reserved.
 # Copyright (c) 2013 Gary Mills
 # Copyright (c) 2013 by Delphix. All rights reserved.
 #
@@ -365,7 +365,7 @@ file path=etc/format.dat group=sys preserve=true
 file path=etc/fs/dev/mount mode=0555
 file path=etc/fs/hsfs/mount mode=0555
 file path=etc/fs/ufs/mount mode=0555
-file path=etc/ftpd/ftpusers group=sys preserve=true
+file path=etc/ftpd/ftpusers group=sys mode=0640 preserve=true
 file path=etc/group group=sys preserve=true
 file path=etc/inet/hosts group=sys preserve=true
 file path=etc/inet/inetd.conf group=sys preserve=true

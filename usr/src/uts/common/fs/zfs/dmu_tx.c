@@ -1,12 +1,13 @@
 /*
  * CDDL HEADER START
  *
- * The contents of this file are subject to the terms of the
- * Common Development and Distribution License (the "License").
- * You may not use this file except in compliance with the License.
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL" or the "License").
+ * You may only use this file in accordance with the terms of the License.
  *
- * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * A full copy of the text of the CDDL should have accompanied this source
+ * at usr/src/OPENSOLARIS.LICENSE and a copy of the CDDL is also available
+ * via the Internet at http://www.illumos.org/license/CDDL.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -592,7 +593,7 @@ dmu_tx_count_free(dmu_tx_hold_t *txh, uint64_t off, uint64_t len)
  * in the amount of space used (but it's OK if that is occasionally not true).
  */
 void
-dmu_tx_mark_netfree(dmu_tx_t *tx)
+dmu_tx_hold_netfree(dmu_tx_t *tx)
 {
 	dmu_tx_hold_t *txh;
 

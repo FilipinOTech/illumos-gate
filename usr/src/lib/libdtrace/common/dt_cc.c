@@ -21,8 +21,8 @@
 
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2013 Joyent Inc. All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
- * Copyright (c) 2013, Joyent Inc. All rights reserved.
  */
 
 /*
@@ -694,10 +694,10 @@ dt_action_trace(dtrace_hdl_t *dtp, dt_node_t *dnp, dtrace_stmtdesc_t *sdp)
 	 * like arrays and function pointers that can't be resolved by
 	 * ctf_type_lookup().  This is later processed by dtrace_dof_create()
 	 * and turned into a reference into the string table so that we can
-	 * get the type information when we process the data after the fact.  In
-	 * the case where we are referring to userland CTF data, we also need to
-	 * to identify which ctf container in question we care about and encode
-	 * that within the name.
+	 * get the type information when we process the data after the fact.
+	 * In the case where we are referring to userland CTF data, we also
+	 * need to identify which CTF container in question we care about and
+	 * encode that within the name.
 	 */
 	if (dnp->dn_ident->di_id == DT_ACT_PRINT) {
 		dt_node_t *dret;

@@ -3,7 +3,7 @@
 #
 
 [build]
-build_machine=parabola
-dcenter_group=dlpx-4.0.0.0-release
+build_machine=eclipse
+dcenter_group=dlpx-trunk
 repo_dir=/data/{user}/dlpx-os-gate
 build_dir=/data/{user}/jenkins/{branch}

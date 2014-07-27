@@ -22,12 +22,11 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Portions Copyright 2011 Martin Matuska
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2014, Joyent, Inc. All rights reserved.
+ * Copyright 2011, 2014 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2014, Joyent, Inc. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
- * Copyright (c) 2014, Nexenta Systems, Inc. All rights reserved.
  */
 
 /*
@@ -1420,7 +1419,7 @@ zfsvfs_hold(const char *name, void *tag, zfsvfs_t **zfvp, boolean_t writer)
 	if (getzfsvfs(name, zfvp) != 0)
 		error = zfsvfs_create(name, zfvp);
 	if (error == 0) {
-		rrm_enter(&(*zfvp)->z_teardown_lock, (writer) ? RW_WRITER :
+		rrw_enter(&(*zfvp)->z_teardown_lock, (writer) ? RW_WRITER :
 		    RW_READER, tag);
 		if ((*zfvp)->z_unmounted) {
 			/*
@@ -1428,7 +1427,7 @@ zfsvfs_hold(const char *name, void *tag, zfsvfs_t **zfvp, boolean_t writer)
 			 * thread should be just about to disassociate the
 			 * objset from the zfsvfs.
 			 */
-			rrm_exit(&(*zfvp)->z_teardown_lock, tag);
+			rrw_exit(&(*zfvp)->z_teardown_lock, tag);
 			return (SET_ERROR(EBUSY));
 		}
 	}
@@ -1438,7 +1437,7 @@ zfsvfs_hold(const char *name, void *tag, zfsvfs_t **zfvp, boolean_t writer)
 static void
 zfsvfs_rele(zfsvfs_t *zfsvfs, void *tag)
 {
-	rrm_exit(&zfsvfs->z_teardown_lock, tag);
+	rrw_exit(&zfsvfs->z_teardown_lock, tag);
 
 	if (zfsvfs->z_vfs) {
 		VFS_RELE(zfsvfs->z_vfs);
@@ -2454,6 +2453,37 @@ zfs_prop_set_special(const char *dsname, zprop_source_t source,
 		}
 		break;
 	}
+	case ZFS_PROP_COMPRESSION:
+	{
+		if (intval == ZIO_COMPRESS_LZ4) {
+			spa_t *spa;
+
+			if ((err = spa_open(dsname, &spa, FTAG)) != 0)
+				return (err);
+
+			/*
+			 * Setting the LZ4 compression algorithm activates
+			 * the feature.
+			 */
+			if (!spa_feature_is_active(spa,
+			    SPA_FEATURE_LZ4_COMPRESS)) {
+				if ((err = zfs_prop_activate_feature(spa,
+				    SPA_FEATURE_LZ4_COMPRESS)) != 0) {
+					spa_close(spa, FTAG);
+					return (err);
+				}
+			}
+
+			spa_close(spa, FTAG);
+		}
+		/*
+		 * We still want the default set action to be performed in the
+		 * caller, we only performed zfeature settings here.
+		 */
+		err = -1;
+		break;
+	}
+
 	default:
 		err = -1;
 	}

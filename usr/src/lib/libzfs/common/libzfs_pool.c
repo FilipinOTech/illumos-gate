@@ -1,12 +1,13 @@
 /*
  * CDDL HEADER START
  *
- * The contents of this file are subject to the terms of the
- * Common Development and Distribution License (the "License").
- * You may not use this file except in compliance with the License.
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL" or the "License").
+ * You may only use this file in accordance with the terms of the License.
  *
- * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * A full copy of the text of the CDDL should have accompanied this source
+ * at usr/src/OPENSOLARIS.LICENSE and a copy of the CDDL is also available
+ * via the Internet at http://www.illumos.org/license/CDDL.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -22,11 +23,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
-<<<<<<< HEAD
- * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
-=======
- * Copyright (c) 2011, 2013, 2014 by Delphix. All rights reserved.
->>>>>>> delphiX-4.0
+ * Copyright (c) 2011, 2012, 2013, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
@@ -3505,7 +3502,7 @@ zpool_get_errlog(zpool_handle_t *zhp, nvlist_t **nverrlistp)
 				void *dst;
 
 				count = zc.zc_nvlist_dst_size;
-				dst = zfs_alloc(zhp->zpool_hdl, count *
+				void *dst = zfs_alloc(zhp->zpool_hdl, count *
 				    sizeof (zbookmark_phys_t));
 				if (dst == NULL)
 					return (-1);

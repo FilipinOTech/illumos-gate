@@ -21,8 +21,8 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011, 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
  * Copyright (c) 2011, 2013, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2012, Joyent, Inc. All rights reserved.
  * Copyright (c) 2014 by Saso Kiselkov. All rights reserved.
  */
 
@@ -2302,6 +2302,7 @@ arc_kmem_reap_now(arc_reclaim_strategy_t strat)
 	kmem_cache_t		*prev_data_cache = NULL;
 	extern kmem_cache_t	*zio_buf_cache[];
 	extern kmem_cache_t	*zio_data_buf_cache[];
+	extern kmem_cache_t	*range_seg_cache;
 
 #ifdef _KERNEL
 	if (arc_meta_used >= arc_meta_limit) {
@@ -2338,6 +2339,7 @@ arc_kmem_reap_now(arc_reclaim_strategy_t strat)
 	}
 	kmem_cache_reap_now(buf_cache);
 	kmem_cache_reap_now(hdr_cache);
+	kmem_cache_reap_now(range_seg_cache);
 
 	/*
 	 * Ask the vmem areana to reclaim unused memory from its
@@ -4596,7 +4598,7 @@ top:
 	}
 	mutex_exit(&l2arc_buflist_mtx);
 
-	vdev_space_update(dev->l2ad_vdev, -bytes_evicted, 0, 0);
+	vdev_space_update(dev->l2ad_vdev, -(taddr - dev->l2ad_evict), 0, 0);
 	dev->l2ad_evict = taddr;
 }
 

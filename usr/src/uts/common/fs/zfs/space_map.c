@@ -483,20 +483,33 @@ space_map_truncate(space_map_t *sm, dmu_tx_t *tx)
 	VERIFY0(dmu_free_range(os, space_map_object(sm), 0, -1ULL, tx));
 	dmu_object_info_from_db(sm->sm_dbuf, &doi);
 
-	if (spa_feature_is_enabled(spa, SPA_FEATURE_SPACEMAP_HISTOGRAM)) {
-		bonuslen = sizeof (space_map_phys_t);
-		ASSERT3U(bonuslen, <=, dmu_bonus_max());
-	} else {
-		bonuslen = SPACE_MAP_SIZE_V0;
-	}
-
-	if (bonuslen != doi.doi_bonus_size ||
-	    doi.doi_data_block_size != SPACE_MAP_INITIAL_BLOCKSIZE) {
+	/*
+	 * If the space map has the wrong bonus size (because
+	 * SPA_FEATURE_SPACEMAP_HISTOGRAM has recently been enabled), or
+	 * the wrong block size (because space_map_blksz has changed),
+	 * free and re-allocate its object with the updated sizes.
+	 *
+	 * Otherwise, just truncate the current object.
+	 */
+	if ((spa_feature_is_enabled(spa, SPA_FEATURE_SPACEMAP_HISTOGRAM) &&
+	    doi.doi_bonus_size != sizeof (space_map_phys_t)) ||
+	    doi.doi_data_block_size != space_map_blksz) {
 		zfs_dbgmsg("txg %llu, spa %s, reallocating: "
 		    "old bonus %u, old blocksz %u", dmu_tx_get_txg(tx),
 		    spa_name(spa), doi.doi_bonus_size, doi.doi_data_block_size);
+
 		space_map_reallocate(sm, tx);
 		VERIFY3U(sm->sm_blksz, ==, SPACE_MAP_INITIAL_BLOCKSIZE);
+	} else {
+		VERIFY0(dmu_free_range(os, space_map_object(sm), 0, -1ULL, tx));
+
+		/*
+		 * If the spacemap is reallocated, its histogram
+		 * will be reset.  Do the same in the common case so that
+		 * bugs related to the uncommon case do not go unnoticed.
+		 */
+		bzero(sm->sm_phys->smp_histogram,
+		    sizeof (sm->sm_phys->smp_histogram));
 	}
 
 	dmu_buf_will_dirty(sm->sm_dbuf, tx);

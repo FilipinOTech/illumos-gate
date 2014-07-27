@@ -31,6 +31,10 @@
  * Copyright (c) 2014 by Delphix. All rights reserved.
  */
 
+/*
+ * Copyright (c) 2014 by Delphix. All rights reserved.
+ */
+
 #ifndef	_DT_PARSER_H
 #define	_DT_PARSER_H
 

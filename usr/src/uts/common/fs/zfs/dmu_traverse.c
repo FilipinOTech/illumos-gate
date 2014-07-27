@@ -1,12 +1,13 @@
 /*
  * CDDL HEADER START
  *
- * The contents of this file are subject to the terms of the
- * Common Development and Distribution License (the "License").
- * You may not use this file except in compliance with the License.
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL" or the "License").
+ * You may only use this file in accordance with the terms of the License.
  *
- * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * A full copy of the text of the CDDL should have accompanied this source
+ * at usr/src/OPENSOLARIS.LICENSE and a copy of the CDDL is also available
+ * via the Internet at http://www.illumos.org/license/CDDL.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -59,6 +60,7 @@ typedef struct traverse_data {
 	int td_flags;
 	prefetch_data_t *td_pfd;
 	boolean_t td_paused;
+	uint64_t td_hole_birth_enabled_txg;
 	blkptr_cb_t *td_func;
 	void *td_arg;
 } traverse_data_t;
@@ -569,6 +571,13 @@ traverse_impl(spa_t *spa, dsl_dataset_t *ds, uint64_t objset, blkptr_t *rootbp,
 	td.td_pfd = &pd;
 	td.td_flags = flags;
 	td.td_paused = B_FALSE;
+
+	if (spa_feature_is_active(spa, SPA_FEATURE_HOLE_BIRTH)) {
+		VERIFY(spa_feature_enabled_txg(spa,
+		    SPA_FEATURE_HOLE_BIRTH, &td.td_hole_birth_enabled_txg));
+	} else {
+		td.td_hole_birth_enabled_txg = 0;
+	}
 
 	pd.pd_blks_max = zfs_pd_blks_max;
 	pd.pd_flags = flags;

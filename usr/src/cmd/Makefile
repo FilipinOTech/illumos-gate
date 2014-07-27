@@ -23,7 +23,7 @@
 # Copyright 2010 Nexenta Systems, Inc.  All rights reserved.
 # Copyright (c) 2012 Joyent, Inc.  All rights reserved.
 # Copyright (c) 2012 by Delphix. All rights reserved.
-# Copyright (c) 2012, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright (c) 2012 OmniTI Computer Consulting, Inc. All rights reserved.
 # Copyright (c) 2013 DEY Storage Systems, Inc. All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
 

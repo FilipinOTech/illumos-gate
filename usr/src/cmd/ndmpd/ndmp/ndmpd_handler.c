@@ -37,8 +37,9 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/* Copyright (c) 1996, 1997 PDC, Network Appliance. All Rights Reserved */
- * Copyright (c) 2012 by Delphix. All rights reserved. */
+/*
+ * Copyright (c) 1996, 1997 PDC, Network Appliance. All Rights Reserved
+ * Copyright (c) 2012 by Delphix. All rights reserved.
  * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 

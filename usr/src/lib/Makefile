@@ -330,7 +330,6 @@ MSGSUBDIRS=		\
 	libinetutil	\
 	libinstzones	\
 	libipadm	\
-	libipd		\
 	libnsl		\
 	libnwam		\
 	libpam		\
@@ -415,7 +414,6 @@ HDRSUBDIRS=		\
 	libinetsvc	\
 	libinetutil	\
 	libinstzones	\
-	libipd		\
 	libipmi		\
 	libipmp		\
 	libipp		\

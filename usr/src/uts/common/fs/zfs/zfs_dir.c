@@ -1,12 +1,13 @@
 /*
  * CDDL HEADER START
  *
- * The contents of this file are subject to the terms of the
- * Common Development and Distribution License (the "License").
- * You may not use this file except in compliance with the License.
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL" or the "License").
+ * You may only use this file in accordance with the terms of the License.
  *
- * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * A full copy of the text of the CDDL should have accompanied this source
+ * at usr/src/OPENSOLARIS.LICENSE and a copy of the CDDL is also available
+ * via the Internet at http://www.illumos.org/license/CDDL.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -554,7 +555,7 @@ zfs_purgedir(znode_t *dzp)
 		dmu_tx_hold_zap(tx, zfsvfs->z_unlinkedobj, FALSE, NULL);
 		/* Is this really needed ? */
 		zfs_sa_upgrade_txholds(tx, xzp);
-		dmu_tx_mark_netfree(tx);
+		dmu_tx_hold_netfree(tx);
 		error = dmu_tx_assign(tx, TXG_WAIT);
 		if (error) {
 			dmu_tx_abort(tx);

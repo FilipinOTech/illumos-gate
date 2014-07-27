@@ -1,12 +1,13 @@
 /*
  * CDDL HEADER START
  *
- * The contents of this file are subject to the terms of the
- * Common Development and Distribution License (the "License").
- * You may not use this file except in compliance with the License.
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL" or the "License").
+ * You may only use this file in accordance with the terms of the License.
  *
- * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or http://www.opensolaris.org/os/licensing.
+ * A full copy of the text of the CDDL should have accompanied this source
+ * at usr/src/OPENSOLARIS.LICENSE and a copy of the CDDL is also available
+ * via the Internet at http://www.illumos.org/license/CDDL.
  * See the License for the specific language governing permissions
  * and limitations under the License.
  *
@@ -2874,7 +2875,7 @@ typedef struct list_cbdata {
  * Given a list of columns to display, output appropriate headers for each one.
  */
 static void
-print_header(zprop_list_t *pl)
+print_header(list_cbdata_t *cb)
 {
 	zprop_list_t *pl = cb->cb_proplist;
 	char headerbuf[ZFS_MAXPROPLEN];
@@ -2917,7 +2918,7 @@ print_header(zprop_list_t *pl)
  * to the described layout.
  */
 static void
-print_dataset(zfs_handle_t *zhp, zprop_list_t *pl, boolean_t scripted)
+print_dataset(zfs_handle_t *zhp, list_cbdata_t *cb)
 {
 	zprop_list_t *pl = cb->cb_proplist;
 	boolean_t first = B_TRUE;
@@ -2930,7 +2931,7 @@ print_dataset(zfs_handle_t *zhp, zprop_list_t *pl, boolean_t scripted)
 
 	for (; pl != NULL; pl = pl->pl_next) {
 		if (!first) {
-			if (scripted)
+			if (cb->cb_scripted)
 				(void) printf("\t");
 			else
 				(void) printf("  ");
@@ -2977,12 +2978,12 @@ print_dataset(zfs_handle_t *zhp, zprop_list_t *pl, boolean_t scripted)
 		 * last column and it is left-justified, don't include a width
 		 * format specifier.
 		 */
-		if (scripted || (pl->pl_next == NULL && !right_justify))
+		if (cb->cb_scripted || (pl->pl_next == NULL && !right_justify))
 			(void) printf("%s", propstr);
 		else if (right_justify)
-			(void) printf("%*s", width, propstr);
+			(void) printf("%*s", pl->pl_width, propstr);
 		else
-			(void) printf("%-*s", width, propstr);
+			(void) printf("%-*s", pl->pl_width, propstr);
 	}
 
 	(void) printf("\n");
@@ -2998,11 +2999,11 @@ list_callback(zfs_handle_t *zhp, void *data)
 
 	if (cbp->cb_first) {
 		if (!cbp->cb_scripted)
-			print_header(cbp->cb_proplist);
+			print_header(cbp);
 		cbp->cb_first = B_FALSE;
 	}
 
-	print_dataset(zhp, cbp->cb_proplist, cbp->cb_scripted);
+	print_dataset(zhp, cbp);
 
 	return (0);
 }
@@ -3041,7 +3042,7 @@ zfs_do_list(int argc, char **argv)
 			flags |= ZFS_ITER_RECURSE;
 			break;
 		case 'H':
-			scripted = B_TRUE;
+			cb.cb_scripted = B_TRUE;
 			break;
 		case 's':
 			if (zfs_add_sort_column(&sortcol, optarg,
