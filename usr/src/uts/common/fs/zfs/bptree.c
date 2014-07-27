@@ -136,6 +136,7 @@ bptree_add(objset_t *os, uint64_t obj, blkptr_t *bp, uint64_t birth_txg,
 
 	bte.be_birth_txg = birth_txg;
 	bte.be_bp = *bp;
+	bzero(&bte.be_zb, sizeof (bte.be_zb));
 	dmu_write(os, obj, bt->bt_end * sizeof (bte), sizeof (bte), &bte, tx);
 
 	dmu_buf_will_dirty(db, tx);
@@ -212,6 +213,8 @@ bptree_iterate(objset_t *os, uint64_t obj, boolean_t free, bptree_itor_t func,
 		bptree_entry_phys_t bte;
 		int flags = TRAVERSE_PREFETCH_METADATA | TRAVERSE_POST;
 
+		ASSERT(!free || i == ba.ba_phys->bt_begin);
+
 		err = dmu_read(os, obj, i * sizeof (bte), sizeof (bte),
 		    &bte, DMU_READ_NO_PREFETCH);
 		if (err != 0)
@@ -265,6 +268,8 @@ bptree_iterate(objset_t *os, uint64_t obj, boolean_t free, bptree_itor_t func,
 				bte.be_birth_txg = UINT64_MAX;
 				dmu_write(os, obj, i * sizeof (bte),
 				    sizeof (bte), &bte, tx);
+				zfs_panic_recover("error %u from "
+				    "traverse_dataset_destroyed()", err);
 			}
 
 			if (!ioerr) {

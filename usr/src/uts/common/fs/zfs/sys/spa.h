@@ -282,6 +282,7 @@ _NOTE(CONSTCOND) } while (0)
 
 typedef enum bp_embedded_type {
 	BP_EMBEDDED_TYPE_DATA,
+	BP_EMBEDDED_TYPE_MOOCH_BYTESWAP,
 	BP_EMBEDDED_TYPE_RESERVED, /* Reserved for an unintegrated feature. */
 	NUM_BP_EMBEDDED_TYPES = BP_EMBEDDED_TYPE_RESERVED
 } bp_embedded_type_t;
@@ -374,6 +375,9 @@ _NOTE(CONSTCOND) } while (0)
 
 #define	BP_GET_LEVEL(bp)		BF64_GET((bp)->blk_prop, 56, 5)
 #define	BP_SET_LEVEL(bp, x)		BF64_SET((bp)->blk_prop, 56, 5, x)
+
+#define	BP_GET_PROP_BIT_61(bp)		BF64_GET((bp)->blk_prop, 61, 1)
+#define	BP_SET_PROP_BIT_61(bp, x)	BF64_SET((bp)->blk_prop, 61, 1, x)
 
 #define	BP_GET_DEDUP(bp)		BF64_GET((bp)->blk_prop, 62, 1)
 #define	BP_SET_DEDUP(bp, x)		BF64_SET((bp)->blk_prop, 62, 1, x)

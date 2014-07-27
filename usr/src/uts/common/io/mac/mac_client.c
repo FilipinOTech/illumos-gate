@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
  */
 
@@ -2097,6 +2098,15 @@ mac_resource_ctl_set(mac_client_handle_t mch, mac_resource_props_t *mrp)
 	return (0);
 }
 
+void
+mac_resource_ctl_get(mac_client_handle_t mch, mac_resource_props_t *mrp)
+{
+	mac_client_impl_t	*mcip = (mac_client_impl_t *)mch;
+	mac_resource_props_t	*mcip_mrp = MCIP_RESOURCE_PROPS(mcip);
+
+	bcopy(mcip_mrp, mrp, sizeof (mac_resource_props_t));
+}
+
 static int
 mac_unicast_flow_create(mac_client_impl_t *mcip, uint8_t *mac_addr,
     uint16_t vid, boolean_t is_primary, boolean_t first_flow,
@@ -3512,7 +3522,7 @@ mac_tx(mac_client_handle_t mch, mblk_t *mp_chain, uintptr_t hint,
 		obytes = (mp_chain->b_cont == NULL ? MBLKL(mp_chain) :
 		    msgdsize(mp_chain));
 
-		MAC_TX(mip, srs_tx->st_arg2, mp_chain, mcip);
+		MAC_TX(mip, (mac_ring_handle_t)srs_tx->st_ring, mp_chain, mcip);
 		if (mp_chain == NULL) {
 			cookie = NULL;
 			SRS_TX_STAT_UPDATE(srs, opackets, 1);

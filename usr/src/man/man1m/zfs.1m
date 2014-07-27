@@ -22,7 +22,7 @@
 .\"
 .\" Copyright (c) 2009 Sun Microsystems, Inc. All Rights Reserved.
 .\" Copyright 2011 Joshua M. Clulow <josh@sysmgr.org>
-.\" Copyright (c) 2014 by Delphix. All rights reserved.
+.\" Copyright (c) 2013, 2014 by Delphix. All rights reserved.
 .\" Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
 .\" Copyright 2013 Nexenta Systems, Inc.  All Rights Reserved.
 .\" Copyright (c) 2014, Joyent, Inc. All rights reserved.
@@ -176,7 +176,7 @@ zfs \- configures ZFS file systems
 
 .LP
 .nf
-\fBzfs\fR \fBsend\fR [\fB-DnPpRve\fR] [\fB-\fR[\fBiI\fR] \fIsnapshot\fR] \fIsnapshot\fR
+\fBzfs\fR \fBsend\fR [\fB-DnPpRrve\fR] [\fB-\fR[\fBiI\fR] \fIsnapshot\fR] \fIsnapshot\fR
 .fi
 
 .LP
@@ -262,8 +262,15 @@ zfs \- configures ZFS file systems
 .LP
 .nf
 \fBzfs\fR \fBdiff\fR [\fB-FHt\fR] \fIsnapshot\fR \fIsnapshot|filesystem\fR
+.fi
+
+.LP
+.nf
+\fBzfs\fR \fBmooch\fR \fB-f\fR \fIclone_file\fR=\fIorigin_file\fR ... \fIclone_directory\fR
+.fi
 
 .SH DESCRIPTION
+.sp
 .LP
 The \fBzfs\fR command configures \fBZFS\fR datasets within a \fBZFS\fR storage
 pool, as described in \fBzpool\fR(1M). A dataset is identified by a unique path
@@ -321,6 +328,7 @@ specified as \fIfilesystem@name\fR or \fIvolume@name\fR.
 .RE
 
 .SS "ZFS File System Hierarchy"
+.sp
 .LP
 A \fBZFS\fR storage pool is a logical collection of devices that provide space
 for datasets. A storage pool is also the root of the \fBZFS\fR file system
@@ -334,6 +342,7 @@ characteristics, however, are managed by the \fBzpool\fR(1M) command.
 .LP
 See \fBzpool\fR(1M) for more information on creating and administering pools.
 .SS "Snapshots"
+.sp
 .LP
 A snapshot is a read-only copy of a file system or volume. Snapshots can be
 created extremely quickly, and initially consume no additional space within the
@@ -350,6 +359,7 @@ in the root of the file system. Snapshots are automatically mounted on demand
 and may be unmounted at regular intervals. The visibility of the \fB\&.zfs\fR
 directory can be controlled by the \fBsnapdir\fR property.
 .SS "Clones"
+.sp
 .LP
 A clone is a writable volume or file system whose initial contents are the same
 as another dataset. As with snapshots, creating a clone is nearly
@@ -369,6 +379,7 @@ The clone parent-child dependency relationship can be reversed by using the
 clone of the specified file system, which makes it possible to destroy the file
 system that the clone was created from.
 .SS "Mount Points"
+.sp
 .LP
 Creating a \fBZFS\fR file system is a simple operation, so the number of file
 systems per system is likely to be numerous. To cope with this, \fBZFS\fR
@@ -401,6 +412,7 @@ is set to \fBlegacy\fR, \fBZFS\fR makes no attempt to manage the file system,
 and the administrator is responsible for mounting and unmounting the file
 system.
 .SS "Zones"
+.sp
 .LP
 A \fBZFS\fR file system can be added to a non-global zone by using the
 \fBzonecfg\fR \fBadd fs\fR subcommand. A \fBZFS\fR file system that is added to
@@ -439,6 +451,7 @@ The global administrator can forcibly clear the \fBzoned\fR property, though
 this should be done with extreme care. The global administrator should verify
 that all the mount points are acceptable before clearing the property.
 .SS "Native Properties"
+.sp
 .LP
 Properties are divided into two types, native properties and user-defined (or
 "user") properties. Native properties either export internal statistics or
@@ -586,6 +599,18 @@ However, it does include space consumed by metadata.
 .sp
 This property can also be referred to by its shortened column name,
 \fBlused\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBmooch_byteswap\fR\fR
+.ad
+.sp .6
+.RS 4n
+Indicates whether the file system or snapshot is using the
+\fBmooch_byteswap\fR pool feature, which is required by the \fBzfs mooch\fR
+subcommand.
 .RE
 
 .sp
@@ -1632,6 +1657,7 @@ The \fBcasesensitivity\fR, \fBnormalization\fR, and \fButf8only\fR properties
 are also new permissions that can be assigned to non-privileged users by using
 the \fBZFS\fR delegated administration feature.
 .SS "Temporary Mount Point Properties"
+.sp
 .LP
 When a file system is mounted, either through \fBmount\fR(1M) for legacy mounts
 or the \fBzfs mount\fR command for normal file systems, its mount options are
@@ -1660,6 +1686,7 @@ are reported as "temporary" by the \fBzfs get\fR command. If the properties are
 changed while the dataset is mounted, the new setting overrides any temporary
 settings.
 .SS "User Properties"
+.sp
 .LP
 In addition to the standard native properties, \fBZFS\fR supports arbitrary
 user properties. User properties have no effect on \fBZFS\fR behavior, but
@@ -1692,6 +1719,7 @@ to clear a user property . If the property is not defined in any parent
 dataset, it is removed entirely. Property values are limited to 1024
 characters.
 .SS "ZFS Volumes as Swap or Dump Devices"
+.sp
 .LP
 During an initial installation a swap device and dump device are created on
 \fBZFS\fR volumes in the \fBZFS\fR root pool. By default, the swap area size is
@@ -1707,6 +1735,7 @@ installed or upgraded, use the \fBswap\fR(1M) and \fBdumpadm\fR(1M) commands.
 If you need to change the size of your swap area or dump device, see the
 \fISolaris ZFS Administration Guide\fR.
 .SH SUBCOMMANDS
+.sp
 .LP
 All subcommands that modify state are logged persistently to the pool in their
 original form.
@@ -1890,7 +1919,7 @@ data would be deleted.
 .ad
 .sp .6
 .RS 4n
-Print machine-parsable verbose information about the deleted data.
+Print machine-parseable verbose information about the deleted data.
 .RE
 
 .sp
@@ -2493,7 +2522,7 @@ is all sources.
 .ad
 .sp .6
 .RS 4n
-Display numbers in parsable (exact) values.
+Display numbers in parseable (exact) values.
 .RE
 
 .RE
@@ -2920,6 +2949,7 @@ See \fBzpool-features\fR(5) for details on ZFS feature flags and the
 .RE
 
 
+.RE
 .sp
 .ne 2
 .na
@@ -3004,13 +3034,13 @@ will be much better if the filesystem uses a dedup-capable checksum (eg.
 .sp .6
 .RS 4n
 Generate a more compact stream by using WRITE_EMBEDDED records for blocks
-which are stored more compactly on disk by the \fBembedded_data\fR pool
-feature.  This flag has no effect if the \fBembedded_data\fR feature is
-disabled.  The receiving system must have the \fBembedded_data\fR feature
+which are stored more compactly on disk by the \fBembedded_data\fR and
+\fBmooch_byteswap\fR pool features.  This flag has no effect if these
+features are disabled.  The receiving system must have the relevant feature
 enabled.  If the \fBlz4_compress\fR feature is active on the sending system,
 then the receiving system must have that feature enabled as well. See
 \fBzpool-features\fR(5) for details on ZFS feature flags and the
-\fBembedded_data\fR feature.
+\fBembedded_data\fR and \fBmooch_byteswap\fR features.
 .RE
 
 .sp
@@ -3061,6 +3091,7 @@ The format of the stream is committed. You will be able to receive your streams
 on future versions of \fBZFS\fR.
 .RE
 
+.RE
 .sp
 .ne 2
 .na
@@ -3100,13 +3131,13 @@ or the origin's origin, etc.
 .sp .6
 .RS 4n
 Generate a more compact stream by using WRITE_EMBEDDED records for blocks
-which are stored more compactly on disk by the \fBembedded_data\fR pool
-feature.  This flag has no effect if the \fBembedded_data\fR feature is
-disabled.  The receiving system must have the \fBembedded_data\fR feature
+which are stored more compactly on disk by the \fBembedded_data\fR and
+\fBmooch_byteswap\fR pool features.  This flag has no effect if these
+features are disabled.  The receiving system must have the relevant feature
 enabled.  If the \fBlz4_compress\fR feature is active on the sending system,
 then the receiving system must have that feature enabled as well. See
 \fBzpool-features\fR(5) for details on ZFS feature flags and the
-\fBembedded_data\fR feature.
+\fBembedded_data\fR and \fBmooch_byteswap\fR features.
 .RE
 .RE
 
@@ -3328,16 +3359,17 @@ diff             subcommand     Allows lookup of paths within a dataset
                                 given an object number, and the ability to
                                 create snapshots necessary to 'zfs diff'.
 mount            subcommand     Allows mount/umount of ZFS datasets
-promote          subcommand     Must also have the 'mount'
-                                and 'promote' ability in the origin file system
-receive          subcommand     Must also have the 'mount' and 'create' ability
+promote          subcommand     Must also have the 'mount' and 'promote'
+                                permissions in the origin file system
+receive          subcommand     Must also have the 'mount' and 'create'
+                                permissions
 rename           subcommand     Must also have the 'mount' and 'create'
-                                ability in the new parent
-rollback         subcommand     Must also have the 'mount' ability
+                                permissions in the new parent
+rollback         subcommand     Must also have the 'mount' permissions
 send             subcommand
 share            subcommand     Allows sharing file systems over NFS or SMB
                                 protocols
-snapshot         subcommand     Must also have the 'mount' ability
+snapshot         subcommand     Must also have the 'mount' permissions
 groupquota       other          Allows accessing any groupquota@... property
 groupused        other          Allows reading any groupused@... property
 userprop         other          Allows changing any user property
@@ -3590,7 +3622,7 @@ F       Regular file
 .ad
 .sp .6
 .RS 4n
-Give more parsable tab-separated output, without header lines and without arrows.
+Give more parseable tab-separated output, without header lines and without arrows.
 .RE
 .sp
 .ne 2
@@ -4082,7 +4114,7 @@ Local+Descendent permissions on (tank/users)
 \fBExample 21 \fRDelegating Property Permissions on a ZFS Dataset
 .sp
 .LP
-The following example shows to grant the ability to set quotas and reservations
+The following example shows how to grant the permissions to set quotas and reservations
 on the \fBusers/home\fR file system. The permissions on \fBusers/home\fR are
 also displayed.
 
@@ -4151,6 +4183,7 @@ M       F       /tank/test/modified
 .sp
 
 .SH EXIT STATUS
+.sp
 .LP
 The following exit values are returned:
 .sp
@@ -4184,6 +4217,7 @@ Invalid command line options were specified.
 .RE
 
 .SH ATTRIBUTES
+.sp
 .LP
 See \fBattributes\fR(5) for descriptions of the following attributes:
 .sp
@@ -4199,6 +4233,7 @@ Interface Stability	Committed
 .TE
 
 .SH SEE ALSO
+.sp
 .LP
 \fBssh\fR(1), \fBiscsitadm\fR(1M), \fBmount\fR(1M), \fBshare\fR(1M),
 \fBsharemgr\fR(1M), \fBunshare\fR(1M), \fBzonecfg\fR(1M), \fBzpool\fR(1M),

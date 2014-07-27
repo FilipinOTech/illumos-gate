@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2013, 2014 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -137,9 +137,15 @@ free_blocks(dnode_t *dn, blkptr_t *bp, int num, dmu_tx_t *tx)
 		 * records transmitted during a zfs send.
 		 */
 
-		uint64_t lsize = BP_GET_LSIZE(bp);
 		dmu_object_type_t type = BP_GET_TYPE(bp);
 		uint64_t lvl = BP_GET_LEVEL(bp);
+		/*
+		 * Use the logical size from the dnode, rather than the
+		 * LSIZE in the BP, because Embedded BP's may have an
+		 * odd LSIZE, which can't be represented in a hole BP.
+		 */
+		uint64_t lsize =
+		    lvl == 0 ? dn->dn_datablksz : (1 << dn->dn_indblkshift);
 
 		bzero(bp, sizeof (blkptr_t));
 
@@ -684,6 +690,11 @@ dnode_sync(dnode_t *dn, dmu_tx_t *tx)
 		return;
 	}
 
+	if (dn->dn_next_nlevels[txgoff]) {
+		dnode_increase_indirection(dn, tx);
+		dn->dn_next_nlevels[txgoff] = 0;
+	}
+
 	if (dn->dn_next_nblkptr[txgoff]) {
 		/* this should only happen on a realloc */
 		ASSERT(dn->dn_allocated_txg == tx->tx_txg);
@@ -706,11 +717,6 @@ dnode_sync(dnode_t *dn, dmu_tx_t *tx)
 		dnp->dn_nblkptr = dn->dn_next_nblkptr[txgoff];
 		dn->dn_next_nblkptr[txgoff] = 0;
 		mutex_exit(&dn->dn_mtx);
-	}
-
-	if (dn->dn_next_nlevels[txgoff]) {
-		dnode_increase_indirection(dn, tx);
-		dn->dn_next_nlevels[txgoff] = 0;
 	}
 
 	dbuf_sync_list(list, tx);

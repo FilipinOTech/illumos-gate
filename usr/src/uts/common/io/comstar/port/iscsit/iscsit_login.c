@@ -21,7 +21,8 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2011, 2014 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
 #include <sys/cpuvar.h>
@@ -55,6 +56,11 @@ typedef struct {
 	idm_pdu_t		*le_pdu;
 } login_event_ctx_t;
 
+/*
+ * Some of the ISCSI_DEFAULT_XXX definitions in iscsi_default.h (which we
+ * include by way of iscsi.h) are #defined as TRUE and FALSE, which are not
+ * defined in iscsi_default.h.
+ */
 #ifndef TRUE
 #define	TRUE B_TRUE
 #endif
@@ -194,7 +200,52 @@ login_resp_complete_cb(idm_pdu_t *pdu, idm_status_t status);
 static idm_status_t
 iscsit_add_declarative_keys(iscsit_conn_t *ict);
 
+/*
+ * This is a highly temporary fix to a deeper problem, and the code for it
+ * should not be pushed upstream.
+ *
+ * There's a not-yet root-caused bug (27256) in the stack where if multiple
+ * machines have the same iqn and try to connect to the iSCSI target, they'll
+ * get into a loop where they get repeatedly get disconnected and reconnect.
+ * Eventually, this brings down the iSCSI target and makes the system
+ * unavailable for all initiators, including properly configured ones.  We've
+ * seen this in the field when somebody clones a VM that has the iSCSI initator
+ * configured.
+ *
+ * As a workaround, we've added the option to deny incoming connections to a
+ * target from a different IP address when there's an established session.
+ *
+ * Alarm bells should be going off now.
+ *
+ * This breaks MC/S, which is the primary reason the behavior is configurable
+ * by this variable.  It probably also breaks reinstatement if a host loses a
+ * DHCP lease, gets a new IP address, and tries to reinstate the connection.
+ * We're less worried about that since hopefully nobody has their server on
+ * DHCP.
+ */
+boolean_t deny_duplicate_iqn_sessions = B_TRUE;
+
 uint64_t max_dataseglen_target = ISCSIT_MAX_RECV_DATA_SEGMENT_LENGTH;
+
+/*
+ * Tunable parameters setting limits on what clients can negotiate.
+ *
+ * IMPORTANT:
+ *
+ * These are all more restrictive (less than) the limits
+ * set in iscsi_protocol.h, and should not be tuned upwards without checking
+ * that there are no technical restrictions on doing so in the code.
+ *
+ * Technically, section 5.2 of RFC3720 allows either the target or the
+ * initiator to propose an operational parameter during negotiation, but a quick
+ * look over the code doesn't seem to reveal that we're trying to do this.  If
+ * we do want to try to propose non-default values in the target, we'd need to
+ * make those tunable too.
+ */
+uint64_t iscsit_max_first_burst_length = ISCSIT_MAX_FIRST_BURST_LENGTH;
+uint64_t iscsit_max_burst_length = ISCSIT_MAX_BURST_LENGTH;
+uint64_t iscsit_max_connections = ISCSIT_MAX_CONNECTIONS;
+uint64_t iscsit_max_outstanding_r2t = ISCSIT_MAX_OUTSTANDING_R2T;
 
 /*
  * global mutex defined in iscsit.c to enforce
@@ -320,6 +371,7 @@ iscsit_login_sm_event(iscsit_conn_t *ict, iscsit_login_event_t event,
 	iscsit_login_sm_event_locked(ict, event, pdu);
 	mutex_exit(&ict->ict_login_sm.icl_mutex);
 }
+
 void
 iscsit_login_sm_event_locked(iscsit_conn_t *ict, iscsit_login_event_t event,
     idm_pdu_t *pdu)
@@ -377,8 +429,9 @@ iscsit_login_sm_event_locked(iscsit_conn_t *ict, iscsit_login_event_t event,
 		if (lsm->icl_login_complete) {
 			lsm->icl_busy = B_TRUE;
 			if (taskq_dispatch(iscsit_global.global_dispatch_taskq,
-			    login_sm_complete, ict, DDI_SLEEP) == NULL) {
-				cmn_err(CE_WARN, "iscsit_login_sm_event_locked:"
+			    login_sm_complete, ict, TQ_SLEEP) == NULL) {
+				cmn_err(CE_PANIC,
+				    "iscsit_login_sm_event_locked:"
 				    " Failed to dispatch task");
 			}
 		}
@@ -1237,8 +1290,7 @@ initial_params_done:
  *    1 - success
  *    0 - address not mapable
  */
-
-int
+static int
 iscsit_is_v4_mapped(struct sockaddr_storage *sa, struct sockaddr_storage *v4sa)
 {
 	struct sockaddr_in *sin;
@@ -1261,6 +1313,36 @@ iscsit_is_v4_mapped(struct sockaddr_storage *sa, struct sockaddr_storage *v4sa)
 	return (ret);
 }
 
+/*
+ * login_sm_session_bind
+ *
+ * This function looks at the data from the initial login request
+ * of a new connection and either looks up an existing session,
+ * creates a new session, or returns an error.  RFC3720 section 5.3.1
+ * defines these rules:
+ *
+ * +------------------------------------------------------------------+
+ * |ISID      | TSIH        | CID    |     Target action              |
+ * +------------------------------------------------------------------+
+ * |new       | non-zero    | any    |     fail the login             |
+ * |          |             |        |     ("session does not exist") |
+ * +------------------------------------------------------------------+
+ * |new       | zero        | any    |     instantiate a new session  |
+ * +------------------------------------------------------------------+
+ * |existing  | zero        | any    |     do session reinstatement   |
+ * |          |             |        |     (see section 5.3.5)        |
+ * +------------------------------------------------------------------+
+ * |existing  | non-zero    | new    |     add a new connection to    |
+ * |          | existing    |        |     the session                |
+ * +------------------------------------------------------------------+
+ * |existing  | non-zero    |existing|     do connection reinstatement|
+ * |          | existing    |        |    (see section 5.3.4)         |
+ * +------------------------------------------------------------------+
+ * |existing  | non-zero    | any    |         fail the login         |
+ * |          | new         |        |     ("session does not exist") |
+ * +------------------------------------------------------------------+
+ *
+ */
 static idm_status_t
 login_sm_session_bind(iscsit_conn_t *ict)
 {
@@ -1384,6 +1466,28 @@ login_sm_session_bind(iscsit_conn_t *ict)
 	if (existing_sess != NULL) {
 		existing_ict = iscsit_sess_lookup_conn(existing_sess,
 		    ict->ict_cid);
+	}
+
+	/*
+	 * See the block comment where deny_duplicate_iqn_sessions is declared
+	 * for further information about this.
+	 */
+	if (deny_duplicate_iqn_sessions && existing_ict != NULL) {
+		/*
+		 * Oddly enough, the iSCSI standard doesn't provide an error
+		 * code for "we're denying a perfectly valid (though possibly
+		 * unwanted because of a misconfigured initiator) connection
+		 * attempt for reasons related to target flakiness."  The
+		 * generic error will have to suffice.
+		 */
+		if (!idm_conn_raddr_equals(ict->ict_ic, existing_ict->ict_ic)) {
+			DTRACE_PROBE3(login__deny__dup__iqn,
+			    iscsit_tgt_t *, tgt, iscsit_conn_t *, existing_ict,
+			    iscsit_conn_t *, ict);
+			SET_LOGIN_ERROR(ict, ISCSI_STATUS_CLASS_INITIATOR_ERR,
+			    ISCSI_LOGIN_STATUS_INIT_ERR);
+			goto session_bind_error;
+		}
 	}
 
 	/*
@@ -2323,9 +2427,9 @@ iscsit_handle_operational_key(iscsit_conn_t *ict, nvpair_t *nvp,
 		kvrc = iscsit_handle_numerical(ict, nvp, num_val, ikvx,
 		    ISCSI_MIN_CONNECTIONS,
 		    ISCSI_MAX_CONNECTIONS,
-		    ISCSIT_MAX_CONNECTIONS);
+		    iscsit_max_connections);
 		break;
-		/* this is a declartive param */
+		/* this is a declarative param */
 	case KI_MAX_RECV_DATA_SEGMENT_LENGTH:
 		kvrc = iscsit_handle_numerical(ict, nvp, num_val, ikvx,
 		    ISCSI_MIN_RECV_DATA_SEGMENT_LENGTH,
@@ -2336,13 +2440,13 @@ iscsit_handle_operational_key(iscsit_conn_t *ict, nvpair_t *nvp,
 		kvrc = iscsit_handle_numerical(ict, nvp, num_val, ikvx,
 		    ISCSI_MIN_MAX_BURST_LENGTH,
 		    ISCSI_MAX_BURST_LENGTH,
-		    ISCSIT_MAX_BURST_LENGTH);
+		    iscsit_max_burst_length);
 		break;
 	case KI_FIRST_BURST_LENGTH:
 		kvrc = iscsit_handle_numerical(ict, nvp, num_val, ikvx,
 		    ISCSI_MIN_FIRST_BURST_LENGTH,
 		    ISCSI_MAX_FIRST_BURST_LENGTH,
-		    ISCSIT_MAX_FIRST_BURST_LENGTH);
+		    iscsit_max_first_burst_length);
 		break;
 	case KI_DEFAULT_TIME_2_WAIT:
 		kvrc = iscsit_handle_numerical(ict, nvp, num_val, ikvx,
@@ -2360,7 +2464,7 @@ iscsit_handle_operational_key(iscsit_conn_t *ict, nvpair_t *nvp,
 		kvrc = iscsit_handle_numerical(ict, nvp, num_val, ikvx,
 		    ISCSI_MIN_MAX_OUTSTANDING_R2T,
 		    ISCSI_MAX_OUTSTANDING_R2T,
-		    ISCSIT_MAX_OUTSTANDING_R2T);
+		    iscsit_max_outstanding_r2t);
 		break;
 	case KI_ERROR_RECOVERY_LEVEL:
 		kvrc = iscsit_handle_numerical(ict, nvp, num_val, ikvx,

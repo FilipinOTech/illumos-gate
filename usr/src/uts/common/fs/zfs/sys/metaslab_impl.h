@@ -24,7 +24,7 @@
  */
 
 /*
- * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2013, 2014 by Delphix. All rights reserved.
  */
 
 #ifndef _SYS_METASLAB_IMPL_H
@@ -177,6 +177,7 @@ struct metaslab {
 
 	int64_t		ms_deferspace;	/* sum of ms_defermap[] space	*/
 	uint64_t	ms_weight;	/* weight vs. others in group	*/
+	uint64_t	ms_factor;
 	uint64_t	ms_access_txg;
 
 	/*

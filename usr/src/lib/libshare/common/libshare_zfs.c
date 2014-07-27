@@ -21,8 +21,6 @@
 
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
- */
-/*
  * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
  */
@@ -236,9 +234,10 @@ get_legacy_mountpoint(char *path, char *dataset, size_t dlen,
 {
 	FILE *fp;
 	struct mnttab entry;
+	int ret = 1;
 
 	if ((fp = fopen(MNTTAB, "r")) == NULL) {
-		return (1);
+		return (ret);
 	}
 
 	while (getmntent(fp, &entry) == 0) {
@@ -254,11 +253,12 @@ get_legacy_mountpoint(char *path, char *dataset, size_t dlen,
 			if (dlen > 0)
 				(void) strlcpy(dataset, entry.mnt_special,
 				    dlen);
+			ret = 0;
 			break;
 		}
 	}
 	(void) fclose(fp);
-	return (1);
+	return (ret);
 }
 
 /*
@@ -280,6 +280,7 @@ get_zfs_dataset(sa_handle_impl_t impl_handle, char *path,
 	char canmount[ZFS_MAXPROPLEN];
 
 	get_all_filesystems(impl_handle, &zlist, &count);
+	qsort(zlist, count, sizeof (void *), mountpoint_compare);
 	for (i = 0; i < count; i++) {
 		/* must have a mountpoint */
 		if (zfs_prop_get(zlist[i], ZFS_PROP_MOUNTPOINT, mountpoint,

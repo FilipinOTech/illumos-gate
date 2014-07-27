@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
  */
 
@@ -141,6 +142,11 @@ typedef enum {
 	MAC_LOGTYPE_FLOW
 } mac_logtype_t;
 
+typedef struct mac_addrprop_s {
+	uint32_t	ma_len;
+	uint8_t		ma_addr[MAXMACADDRLEN];
+} mac_addrprop_t;
+
 #define	MAXLINKPROPNAME		256		/* max property name len */
 
 /*
@@ -214,6 +220,8 @@ typedef enum {
 	MAC_PROP_MAX_TXHWCLNT_AVAIL,
 	MAC_PROP_IB_LINKMODE,
 	MAC_PROP_SECONDARY_ADDRS,
+	MAC_PROP_MACADDRESS,
+	MAC_PROP_ALIAS,
 	MAC_PROP_PRIVATE = -1
 } mac_prop_id_t;
 

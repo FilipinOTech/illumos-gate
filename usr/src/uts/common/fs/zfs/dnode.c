@@ -18,6 +18,7 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
@@ -147,6 +148,7 @@ dnode_cons(void *arg, void *unused, int kmflag)
 	dn->dn_newuid = 0;
 	dn->dn_newgid = 0;
 	dn->dn_id_flags = 0;
+	dn->dn_origin_obj_refd = 0;
 
 	dn->dn_dbufs_count = 0;
 	dn->dn_unlisted_l0_blkid = 0;
@@ -398,6 +400,22 @@ dnode_setdblksz(dnode_t *dn, int size)
 	dn->dn_datablkshift = ISP2(size) ? highbit64(size - 1) : 0;
 }
 
+/*
+ * Refresh the cached dn_origin_obj_refd by calling the ZPL's callback.
+ * This is only used immediately after the object is created, when the
+ * mooch_obj is first established.
+ */
+void
+dmu_object_refresh_mooch_obj(objset_t *os, uint64_t object)
+{
+	dnode_t *dn;
+	ASSERT(os->os_dsl_dataset->ds_mooch_byteswap);
+	VERIFY0(dnode_hold(os, object, FTAG, &dn));
+	ASSERT0(dn->dn_origin_obj_refd);
+	VERIFY0(dmu_objset_mooch_obj_refd(os, object, &dn->dn_origin_obj_refd));
+	dnode_rele(dn, FTAG);
+}
+
 static dnode_t *
 dnode_create(objset_t *os, dnode_phys_t *dnp, dmu_buf_impl_t *db,
     uint64_t object, dnode_handle_t *dnh)
@@ -434,6 +452,13 @@ dnode_create(objset_t *os, dnode_phys_t *dnp, dmu_buf_impl_t *db,
 	dn->dn_maxblkid = dnp->dn_maxblkid;
 	dn->dn_have_spill = ((dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) != 0);
 	dn->dn_id_flags = 0;
+
+	if (os->os_dsl_dataset != NULL &&
+	    os->os_dsl_dataset->ds_mooch_byteswap) {
+		int error = dmu_objset_mooch_obj_refd(os,
+		    object, &dn->dn_origin_obj_refd);
+		ASSERT(error == 0 || error == ENOENT);
+	}
 
 	dmu_zfetch_init(&dn->dn_zfetch, dn);
 
@@ -577,6 +602,7 @@ dnode_allocate(dnode_t *dn, dmu_object_type_t ot, int blocksize, int ibs,
 
 	dn->dn_allocated_txg = tx->tx_txg;
 	dn->dn_id_flags = 0;
+	dn->dn_origin_obj_refd = 0;
 
 	dnode_setdirty(dn, tx);
 	dn->dn_next_indblkshift[tx->tx_txg & TXG_MASK] = ibs;
@@ -697,6 +723,7 @@ dnode_move_impl(dnode_t *odn, dnode_t *ndn)
 	ndn->dn_datablkszsec = odn->dn_datablkszsec;
 	ndn->dn_datablksz = odn->dn_datablksz;
 	ndn->dn_maxblkid = odn->dn_maxblkid;
+	ndn->dn_origin_obj_refd = odn->dn_origin_obj_refd;
 	bcopy(&odn->dn_next_nblkptr[0], &ndn->dn_next_nblkptr[0],
 	    sizeof (odn->dn_next_nblkptr));
 	bcopy(&odn->dn_next_nlevels[0], &ndn->dn_next_nlevels[0],
@@ -1939,6 +1966,15 @@ dnode_next_offset(dnode_t *dn, int flags, uint64_t *offset,
 	while (error == 0 && --lvl >= minlvl) {
 		error = dnode_next_offset_level(dn,
 		    flags, offset, lvl, blkfill, txg);
+	}
+
+	/*
+	 * There's always a "virtual hole" at the end of the object, even
+	 * if all BP's which physically exist are non-holes.
+	 */
+	if ((flags & DNODE_FIND_HOLE) && error == ESRCH && txg == 0 &&
+	    minlvl == 1 && blkfill == 1 && !(flags & DNODE_FIND_BACKWARDS)) {
+		error = 0;
 	}
 
 	if (error == 0 && (flags & DNODE_FIND_BACKWARDS ?

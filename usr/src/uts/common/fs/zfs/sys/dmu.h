@@ -282,6 +282,7 @@ int dmu_objset_find(char *name, int func(const char *, void *), void *arg,
 void dmu_objset_byteswap(void *buf, size_t size);
 int dsl_dataset_rename_snapshot(const char *fsname,
     const char *oldsnapname, const char *newsnapname, boolean_t recursive);
+int dsl_dataset_activate_mooch_byteswap(objset_t *os);
 
 typedef struct dmu_buf {
 	uint64_t db_object;		/* object that this buffer is part of */
@@ -400,6 +401,8 @@ void dmu_object_set_checksum(objset_t *os, uint64_t object, uint8_t checksum,
  */
 void dmu_object_set_compress(objset_t *os, uint64_t object, uint8_t compress,
     dmu_tx_t *tx);
+
+void dmu_object_refresh_mooch_obj(objset_t *os, uint64_t object);
 
 void
 dmu_write_embedded(objset_t *os, uint64_t object, uint64_t offset,
@@ -761,8 +764,9 @@ extern int dmu_dir_list_next(objset_t *os, int namelen, char *name,
 
 typedef int objset_used_cb_t(dmu_object_type_t bonustype,
     void *bonus, uint64_t *userp, uint64_t *groupp);
+typedef int objset_mooch_cb_t(objset_t *os, uint64_t obj, uint64_t *objp);
 extern void dmu_objset_register_type(dmu_objset_type_t ost,
-    objset_used_cb_t *cb);
+    objset_used_cb_t *used_cb, objset_mooch_cb_t *mooch_cb);
 extern void dmu_objset_set_user(objset_t *os, void *user_ptr);
 extern void *dmu_objset_get_user(objset_t *os);
 
@@ -802,6 +806,15 @@ int dmu_sync(struct zio *zio, uint64_t txg, dmu_sync_cb_t *done, zgd_t *zgd);
  */
 int dmu_offset_next(objset_t *os, uint64_t object, boolean_t hole,
     uint64_t *off);
+
+/*
+ * Check if a DMU object has any dirty blocks. If so, sync out
+ * all pending transaction groups. Otherwise, this function
+ * does not alter DMU state. This could be improved to only sync
+ * out the necessary transaction groups for this particular
+ * object.
+ */
+int dmu_object_wait_synced(objset_t *os, uint64_t object);
 
 /*
  * Initial setup and final teardown.

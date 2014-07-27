@@ -21,7 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2013, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
@@ -40,6 +40,7 @@
 #include <sys/dmu_zfetch.h>
 #include <sys/sa.h>
 #include <sys/sa_impl.h>
+#include <sys/mooch_byteswap.h>
 #include <sys/zfeature.h>
 #include <sys/blkptr.h>
 #include <sys/range_tree.h>
@@ -185,6 +186,7 @@ dbuf_hash_insert(dmu_buf_impl_t *db)
 
 /*
  * Remove an entry from the hash table.  It must be in the EVICTING state.
+ * This operation will fail if there are any existing holds on the db.
  */
 static void
 dbuf_hash_remove(dmu_buf_impl_t *db)
@@ -433,6 +435,7 @@ static void
 dbuf_set_data(dmu_buf_impl_t *db, arc_buf_t *buf)
 {
 	ASSERT(MUTEX_HELD(&db->db_mtx));
+	ASSERT(db->db_buf == NULL || !arc_has_callback(db->db_buf));
 	db->db_buf = buf;
 	if (buf != NULL) {
 		ASSERT(buf->b_data != NULL);
@@ -518,6 +521,91 @@ dbuf_read_done(zio_t *zio, arc_buf_t *buf, void *vdb)
 	dbuf_rele_and_unlock(db, NULL);
 }
 
+typedef struct mooch_read_arg {
+	dmu_buf_impl_t *mra_origin_db;
+	dmu_buf_impl_t *mra_clone_db;
+} mooch_read_arg_t;
+
+static void
+mooch_read_done(zio_t *zio)
+{
+	mooch_read_arg_t *mra = zio->io_private;
+
+	ASSERT3U(mra->mra_clone_db->db.db_size, ==,
+	    mra->mra_origin_db->db.db_size);
+
+	arc_buf_t *abuf = arc_buf_alloc(zio->io_spa,
+	    mra->mra_clone_db->db.db_size, mra->mra_clone_db,
+	    DBUF_GET_BUFC_TYPE(mra->mra_clone_db));
+
+	if (zio->io_error == 0) {
+		mooch_byteswap_reconstruct(&mra->mra_origin_db->db,
+		    abuf->b_data, mra->mra_clone_db->db_blkptr);
+	}
+	dbuf_read_done(zio, abuf, mra->mra_clone_db);
+	dbuf_rele(mra->mra_origin_db, NULL);
+	kmem_free(mra, sizeof (*mra));
+}
+
+/*
+ * Call with db_mtx held, returns with it released.
+ */
+static void
+dbuf_read_mooch(dmu_buf_impl_t *db, uint64_t refd_obj, uint32_t flags,
+    zio_t *pio)
+{
+	objset_t *origin_objset;
+	int error;
+
+	ASSERT(refd_obj != 0);
+	ASSERT(MUTEX_HELD(&db->db_mtx));
+	ASSERT(BP_IS_EMBEDDED(db->db_blkptr) &&
+	    BPE_GET_ETYPE(db->db_blkptr) == BP_EMBEDDED_TYPE_MOOCH_BYTESWAP);
+	ASSERT(!dbuf_is_metadata(db));
+	ASSERT(spa_feature_is_active(dmu_objset_spa(db->db_objset),
+	    SPA_FEATURE_MOOCH_BYTESWAP));
+	ASSERT(db->db_objset->os_dsl_dataset->ds_mooch_byteswap);
+
+	db->db_state = DB_READ;
+	mutex_exit(&db->db_mtx);
+
+	error = dmu_objset_mooch_origin(db->db_objset, &origin_objset);
+	if (error != 0) {
+		pio->io_error = EIO;
+		return;
+	}
+
+	/*
+	 * Get the dbuf that we mooch from the origin, but don't read it in
+	 * synchronously.
+	 */
+	dmu_buf_t *origin_db;
+	error = dmu_buf_hold_noread(origin_objset, refd_obj,
+	    db->db.db_offset, NULL, &origin_db);
+	if (error != 0) {
+		pio->io_error = EIO;
+		return;
+	}
+
+	dbuf_add_ref(db, NULL);
+
+	/*
+	 * Insert a "null" zio that will be notified (by having its done
+	 * func called) when the child zio (which reads the dbuf from
+	 * the origin) is complete.
+	 */
+	mooch_read_arg_t *mra = kmem_alloc(sizeof (*mra), KM_SLEEP);
+	mra->mra_clone_db = db;
+	mra->mra_origin_db = (dmu_buf_impl_t *)origin_db;
+	pio = zio_null(pio, dmu_objset_spa(db->db_objset),
+	    NULL, mooch_read_done, mra, 0);
+
+	/* Issue asynchronous read of origin dbuf. */
+	VERIFY0(dbuf_read(mra->mra_origin_db, pio, flags));
+	zio_nowait(pio);
+
+}
+
 static void
 dbuf_read_impl(dmu_buf_impl_t *db, zio_t *zio, uint32_t *flags)
 {
@@ -568,6 +656,15 @@ dbuf_read_impl(dmu_buf_impl_t *db, zio_t *zio, uint32_t *flags)
 		db->db_state = DB_CACHED;
 		*flags |= DB_RF_CACHED;
 		mutex_exit(&db->db_mtx);
+		return;
+	}
+
+	if (BP_IS_EMBEDDED(db->db_blkptr) &&
+	    BPE_GET_ETYPE(db->db_blkptr) == BP_EMBEDDED_TYPE_MOOCH_BYTESWAP) {
+		uint64_t refd_obj = dn->dn_origin_obj_refd;
+		DB_DNODE_EXIT(db);
+		dbuf_read_mooch(db, refd_obj,
+		    (*flags) & ~DB_RF_HAVESTRUCT, zio);
 		return;
 	}
 
@@ -1438,11 +1535,62 @@ dmu_buf_will_fill(dmu_buf_t *db_fake, dmu_tx_t *tx)
 	(void) dbuf_dirty(db, tx);
 }
 
+static void
+dbuf_override_impl(dmu_buf_impl_t *db, const blkptr_t *bp, dmu_tx_t *tx)
+{
+	struct dirty_leaf *dl;
+
+	ASSERT3U(db->db_last_dirty->dr_txg, ==, tx->tx_txg);
+	dl = &db->db_last_dirty->dt.dl;
+	dl->dr_overridden_by = *bp;
+	dl->dr_override_state = DR_OVERRIDDEN;
+	dl->dr_overridden_by.blk_birth = db->db_last_dirty->dr_txg;
+}
+
 #pragma weak dmu_buf_fill_done = dbuf_fill_done
 /* ARGSUSED */
 void
 dbuf_fill_done(dmu_buf_impl_t *db, dmu_tx_t *tx)
 {
+	dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbuf;
+	uint64_t refd_obj;
+
+	/*
+	 * If this object can implicitly reference an object in its origin,
+	 * and this is the first time this block is being written, then
+	 * see if its data can be represented as a transformation of the
+	 * block at the same offset in the origin's object.
+	 */
+	DB_DNODE_ENTER(db);
+	refd_obj = DB_DNODE(db)->dn_origin_obj_refd;
+	DB_DNODE_EXIT(db);
+	if (refd_obj != 0 && db->db_level == 0 &&
+	    db->db_blkid != DMU_BONUS_BLKID &&
+	    (db->db_blkptr == NULL || BP_IS_HOLE(db->db_blkptr))) {
+		dmu_buf_t *origin_db;
+		objset_t *origin_objset;
+		int error;
+
+		ASSERT(spa_feature_is_active(dmu_objset_spa(db->db_objset),
+		    SPA_FEATURE_MOOCH_BYTESWAP));
+		ASSERT(db->db_objset->os_dsl_dataset->ds_mooch_byteswap);
+
+		error = dmu_objset_mooch_origin(db->db_objset, &origin_objset);
+		if (error == 0) {
+			error = dmu_buf_hold(origin_objset, refd_obj,
+			    db->db.db_offset, FTAG, &origin_db, 0);
+		}
+		if (error == 0) {
+			blkptr_t bp;
+
+			error = mooch_byteswap_determine(origin_db,
+			    &db->db, &bp);
+			if (error == 0)
+				dbuf_override_impl(db, &bp, tx);
+			dmu_buf_rele(origin_db, FTAG);
+		}
+	}
+
 	mutex_enter(&db->db_mtx);
 	DBUF_VERIFY(db);
 
@@ -1470,6 +1618,15 @@ dmu_buf_write_embedded(dmu_buf_t *dbuf, void *data,
 	struct dirty_leaf *dl;
 	dmu_object_type_t type;
 
+	if (etype == BP_EMBEDDED_TYPE_DATA) {
+		ASSERT(spa_feature_is_active(dmu_objset_spa(db->db_objset),
+		    SPA_FEATURE_EMBEDDED_DATA));
+	} else if (etype == BP_EMBEDDED_TYPE_MOOCH_BYTESWAP) {
+		ASSERT(spa_feature_is_active(dmu_objset_spa(db->db_objset),
+		    SPA_FEATURE_MOOCH_BYTESWAP));
+		ASSERT(db->db_objset->os_dsl_dataset->ds_mooch_byteswap);
+	}
+
 	DB_DNODE_ENTER(db);
 	type = DB_DNODE(db)->dn_type;
 	DB_DNODE_EXIT(db);
@@ -1479,6 +1636,7 @@ dmu_buf_write_embedded(dmu_buf_t *dbuf, void *data,
 
 	dmu_buf_will_not_fill(dbuf, tx);
 
+	blkptr_t bp;
 	ASSERT3U(db->db_last_dirty->dr_txg, ==, tx->tx_txg);
 	dl = &db->db_last_dirty->dt.dl;
 	encode_embedded_bp_compressed(&dl->dr_overridden_by,
@@ -1490,6 +1648,8 @@ dmu_buf_write_embedded(dmu_buf_t *dbuf, void *data,
 
 	dl->dr_override_state = DR_OVERRIDDEN;
 	dl->dr_overridden_by.blk_birth = db->db_last_dirty->dr_txg;
+
+	dbuf_override_impl(db, &bp, tx);
 }
 
 /*
@@ -1844,6 +2004,7 @@ dbuf_destroy(dmu_buf_impl_t *db)
 	db->db_parent = NULL;
 	db->db_buf = NULL;
 
+	ASSERT(!list_link_active(&db->db_link));
 	ASSERT(db->db.db_data == NULL);
 	ASSERT(db->db_hash_next == NULL);
 	ASSERT(db->db_blkptr == NULL);
@@ -1877,6 +2038,15 @@ dbuf_prefetch(dnode_t *dn, uint64_t blkid, zio_priority_t prio)
 	}
 
 	if (dbuf_findbp(dn, 0, blkid, TRUE, &db, &bp) == 0) {
+		if (bp != NULL && BP_IS_EMBEDDED(bp) &&
+		    BPE_GET_ETYPE(bp) == BP_EMBEDDED_TYPE_MOOCH_BYTESWAP) {
+			objset_t *origin_os;
+			if (dmu_objset_mooch_origin(dn->dn_objset,
+			    &origin_os) == 0) {
+				dmu_prefetch(origin_os, dn->dn_origin_obj_refd,
+				    blkid * dn->dn_datablksz, dn->dn_datablksz);
+			}
+		}
 		if (bp && !BP_IS_HOLE(bp) && !BP_IS_EMBEDDED(bp)) {
 			dsl_dataset_t *ds = dn->dn_objset->os_dsl_dataset;
 			uint32_t aflags = ARC_NOWAIT | ARC_PREFETCH;

@@ -19,6 +19,8 @@ HDRS =		libipd.h
 HDRDIR =	common
 SUBDIRS =	$(MACH)
 $(BUILD64)SUBDIRS +=	$(MACH64)
+POFILE =	libipd.po
+MSGFILES =	common/*.c
 
 all :=		TARGET = all
 clean :=	TARGET = clean
@@ -30,13 +32,18 @@ lint :=		TARGET = lint
 
 all clean clobber install lint: $(SUBDIRS)
 
-install_h: 	$(ROOTHDRS)
+install_h:	$(ROOTHDRS)
 
 check:		$(CHECKHDRS)
+
+$(POFILE):	pofile_MSGFILES
+
+_msg:		$(MSGDOMAINPOFILE)
 
 $(SUBDIRS):  FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)
 
 FRC:
 
+include $(SRC)/Makefile.msg.targ
 include ../Makefile.targ

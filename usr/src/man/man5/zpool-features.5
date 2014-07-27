@@ -256,26 +256,6 @@ never return to being \fBenabled\fB.
 .sp
 .ne 2
 .na
-\fB\fBspacemap_histogram\fR\fR
-.ad
-.RS 4n
-.TS
-l l .
-GUID	com.delphix:spacemap_histogram
-READ\-ONLY COMPATIBLE	yes
-DEPENDENCIES	none
-.TE
-
-This features allows ZFS to maintain more information about how free space
-is organized within the pool. If this feature is \fBenabled\fR, ZFS will
-set this feature to \fBactive\fR when a new space map object is created or
-an existing space map is upgraded to the new format. Once the feature is
-\fBactive\fR, it will remain in that state until the pool is destroyed.
-.RE
-
-.sp
-.ne 2
-.na
 \fB\fBmulti_vdev_crash_dump\fR\fR
 .ad
 .RS 4n
@@ -293,6 +273,26 @@ configuration.
 When the \fBmulti_vdev_crash_dump\fR feature is set to \fBenabled\fR,
 the administrator can use the \fBdumpadm\fR(1M) command to configure a
 dump device on a pool comprised of multiple vdevs.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBspacemap_histogram\fR\fR
+.ad
+.RS 4n
+.TS
+l l .
+GUID	com.delphix:spacemap_histogram
+READ\-ONLY COMPATIBLE	yes
+DEPENDENCIES	none
+.TE
+
+This features allows ZFS to maintain more information about how free space
+is organized within the pool. If this feature is \fBenabled\fR, ZFS will
+set this feature to \fBactive\fR when a new space map object is created or
+an existing space map is upgraded to the new format. Once the feature is
+\fBactive\fR, it will remain in that state until the pool is destroyed.
 .RE
 
 .sp
@@ -427,6 +427,29 @@ and no additional i/o is needed to read and write the data block.
 
 This feature becomes \fBactive\fR as soon as it is enabled and will
 never return to being \fBenabled\fR.
+
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBmooch_byteswap\fR\fR
+.ad
+.RS 4n
+.TS
+l l .
+GUID	com.delphix:mooch_byteswap
+READ\-ONLY COMPATIBLE	no
+DEPENDENCIES	extensible_dataset
+.TE
+
+This feature enables the use of the "zfs mooch" subcommand, which allows files
+which are byteswapped versions of other files to be stored much more compactly.
+
+This feature becomes \fBactive\fR when the "zfs mooch" command is used,
+and is returned to being \fBenabled\fR once all filesystems that have been
+used with this feature are destroyed.  Filesystems using this feature can
+be listed by running \fBzfs get -r mooch_byteswap \fIpoolname\fB | grep " on "\fR
 
 .RE
 

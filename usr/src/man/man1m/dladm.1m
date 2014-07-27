@@ -1,5 +1,6 @@
 '\" te
 .\" Copyright (c) 2008, Sun Microsystems, Inc. All Rights Reserved
+.\" Copyright (c) 2012 by Delphix. All rights reserved.
 .\" Copyright (c) 2014, Joyent, Inc. All Rights Reserved
 .\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for permission to reproduce portions of its copyrighted documentation. Original documentation from The Open Group can be obtained online at http://www.opengroup.org/bookstore/.
 .\" The Institute of Electrical and Electronics Engineers and The Open Group, have given us permission to reprint portions of their documentation. In the following statement, the phrase "this text" refers to portions of the system documentation. Portions of this text
@@ -4370,6 +4371,17 @@ The following general link properties are supported:
 .sp
 .ne 2
 .na
+\fB\fBalias\fR\fR
+.ad
+.sp .6
+.RS 4n
+An optional alias name for the data link.  This can be an arbitrary string
+limited to 64 characters.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBallowed-ips\fR\fR
 .ad
 .sp .6
@@ -4454,6 +4466,16 @@ number is subtracted from the counter for a bridge link every 5 seconds. Only
 non-VLAN, non-VNIC type links have this property.
 .sp
 The default value is \fB200\fR. Valid values are greater or equal to 0.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBmac-address\fR\fR
+.ad
+.sp .6
+.RS 4n
+The MAC address of the link.  The default value is the factory MAC address.
 .RE
 
 .sp

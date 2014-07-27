@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2013, 2014 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -164,6 +164,7 @@ resume_skip_check(traverse_data_t *td, const dnode_phys_t *dnp,
 		 * If we found the block we're trying to resume from, zero
 		 * the bookmark out to indicate that we have resumed.
 		 */
+		ASSERT3U(zb->zb_object, <=, td->td_resume->zb_object);
 		if (bcmp(zb, td->td_resume, sizeof (*zb)) == 0) {
 			bzero(td->td_resume, sizeof (*zb));
 			if (td->td_flags & TRAVERSE_POST)
@@ -171,6 +172,14 @@ resume_skip_check(traverse_data_t *td, const dnode_phys_t *dnp,
 		}
 	}
 	return (RESUME_SKIP_NONE);
+}
+
+static void
+traverse_pause(traverse_data_t *td, const zbookmark_t *zb)
+{
+	ASSERT(td->td_resume != NULL);
+	ASSERT0(zb->zb_level);
+	bcopy(zb, td->td_resume, sizeof (*td->td_resume));
 }
 
 static void
@@ -212,10 +221,11 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
     const blkptr_t *bp, const zbookmark_phys_t *zb)
 {
 	zbookmark_phys_t czb;
-	int err = 0;
+	int err = 0, lasterr = 0;
 	arc_buf_t *buf = NULL;
 	prefetch_data_t *pd = td->td_pfd;
 	boolean_t hard = td->td_flags & TRAVERSE_HARD;
+	boolean_t pause = B_FALSE;
 
 	switch (resume_skip_check(td, dnp, zb)) {
 	case RESUME_SKIP_ALL:
@@ -252,7 +262,9 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
 		return (0);
 	}
 
-	if (pd != NULL && !pd->pd_exited && prefetch_needed(pd, bp)) {
+		if (pd && !pd->pd_exited &&
+	    (prefetch_needed(pd, bp) || (pd->pd_flags & TRAVERSE_PREFETCH_DATA) ||
+	    BP_GET_TYPE(bp) == DMU_OT_DNODE || BP_GET_LEVEL(bp) > 0)) {
 		mutex_enter(&pd->pd_mtx);
 		ASSERT(pd->pd_blks_fetched >= 0);
 		while (pd->pd_blks_fetched == 0 && !pd->pd_exited)
@@ -274,6 +286,8 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
 		    td->td_arg);
 		if (err == TRAVERSE_VISIT_NO_CHILDREN)
 			return (0);
+		if (err == ERESTART)
+			pause = B_TRUE; /* handle pausing at a common point */
 		if (err != 0)
 			goto post;
 	}
@@ -303,8 +317,11 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
 			    zb->zb_level - 1,
 			    zb->zb_blkid * epb + i);
 			err = traverse_visitbp(td, dnp, &cbp[i], &czb);
-			if (err != 0)
-				break;
+			if (err != 0) {
+				if (!hard)
+					break;
+				lasterr = err;
+			}
 		}
 	} else if (BP_GET_TYPE(bp) == DMU_OT_DNODE) {
 		uint32_t flags = ARC_WAIT;
@@ -326,8 +343,11 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
 		for (i = 0; i < epb; i++) {
 			err = traverse_dnode(td, &dnp[i], zb->zb_objset,
 			    zb->zb_blkid * epb + i);
-			if (err != 0)
-				break;
+			if (err != 0) {
+				if (!hard)
+					break;
+				lasterr = err;
+			}
 		}
 	} else if (BP_GET_TYPE(bp) == DMU_OT_OBJSET) {
 		uint32_t flags = ARC_WAIT;
@@ -352,10 +372,18 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
 
 		err = traverse_dnode(td, dnp, zb->zb_objset,
 		    DMU_META_DNODE_OBJECT);
+		if (err && hard) {
+			lasterr = err;
+			err = 0;
+		}
 		if (err == 0 && arc_buf_size(buf) >= sizeof (objset_phys_t)) {
 			dnp = &osp->os_groupused_dnode;
 			err = traverse_dnode(td, dnp, zb->zb_objset,
 			    DMU_GROUPUSED_OBJECT);
+		}
+		if (err && hard) {
+			lasterr = err;
+			err = 0;
 		}
 		if (err == 0 && arc_buf_size(buf) >= sizeof (objset_phys_t)) {
 			dnp = &osp->os_userused_dnode;
@@ -368,8 +396,16 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
 		(void) arc_buf_remove_ref(buf, &buf);
 
 post:
-	if (err == 0 && (td->td_flags & TRAVERSE_POST))
+	if (err == 0 && (td->td_flags & TRAVERSE_POST)) {
 		err = td->td_func(td->td_spa, NULL, bp, zb, dnp, td->td_arg);
+		if (err == ERESTART)
+			pause = B_TRUE;
+	}
+	if (pause && td->td_resume != NULL) {
+		ASSERT3U(err, ==, ERESTART);
+		ASSERT(!hard);
+		traverse_pause(td, zb);
+	}
 
 	if (hard && (err == EIO || err == ECKSUM)) {
 		/*
@@ -378,7 +414,6 @@ post:
 		 */
 		err = 0;
 	}
-
 	/*
 	 * If we are stopping here, set td_resume.
 	 */
@@ -398,7 +433,7 @@ post:
 		td->td_paused = B_TRUE;
 	}
 
-	return (err);
+	return (err != 0 ? err : lasterr);
 }
 
 static void
@@ -423,21 +458,30 @@ static int
 traverse_dnode(traverse_data_t *td, const dnode_phys_t *dnp,
     uint64_t objset, uint64_t object)
 {
-	int j, err = 0;
+	int j, err = 0, lasterr = 0;
 	zbookmark_phys_t czb;
+	boolean_t hard = (td->td_flags & TRAVERSE_HARD);
 
 	for (j = 0; j < dnp->dn_nblkptr; j++) {
 		SET_BOOKMARK(&czb, objset, object, dnp->dn_nlevels - 1, j);
 		err = traverse_visitbp(td, dnp, &dnp->dn_blkptr[j], &czb);
-		if (err != 0)
-			break;
+		if (err != 0) {
+			if (!hard)
+				break;
+			lasterr = err;
+		}
 	}
 
 	if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
 		SET_BOOKMARK(&czb, objset, object, 0, DMU_SPILL_BLKID);
 		err = traverse_visitbp(td, dnp, &dnp->dn_spill, &czb);
+		if (err != 0) {
+			if (!hard)
+				return (err);
+			lasterr = err;
+		}
 	}
-	return (err);
+	return (err != 0 ? err : lasterr);
 }
 
 /* ARGSUSED */
@@ -452,7 +496,10 @@ traverse_prefetcher(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	if (pfd->pd_cancel)
 		return (SET_ERROR(EINTR));
 
-	if (!prefetch_needed(pfd, bp))
+	if (!prefetch_needed(pfd, bp) || (BP_IS_HOLE(bp) ||
+	    !((pfd->pd_flags & TRAVERSE_PREFETCH_DATA) ||
+	    BP_GET_TYPE(bp) == DMU_OT_DNODE || BP_GET_LEVEL(bp) > 0) ||
+	    BP_GET_TYPE(bp) == DMU_OT_INTENT_LOG))
 		return (0);
 
 	mutex_enter(&pfd->pd_mtx);
@@ -595,7 +642,7 @@ int
 traverse_pool(spa_t *spa, uint64_t txg_start, int flags,
     blkptr_cb_t func, void *arg)
 {
-	int err;
+	int err, lasterr = 0;
 	uint64_t obj;
 	dsl_pool_t *dp = spa_get_dsl(spa);
 	objset_t *mos = dp->dp_meta_objset;
@@ -608,15 +655,16 @@ traverse_pool(spa_t *spa, uint64_t txg_start, int flags,
 		return (err);
 
 	/* visit each dataset */
-	for (obj = 1; err == 0;
+	for (obj = 1; err == 0 || (err != ESRCH && hard);
 	    err = dmu_object_next(mos, &obj, FALSE, txg_start)) {
 		dmu_object_info_t doi;
 
 		err = dmu_object_info(mos, obj, &doi);
 		if (err != 0) {
-			if (hard)
-				continue;
-			break;
+			if (!hard)
+				return (err);
+			lasterr = err;
+			continue;
 		}
 
 		if (doi.doi_bonus_type == DMU_OT_DSL_DATASET) {
@@ -627,19 +675,23 @@ traverse_pool(spa_t *spa, uint64_t txg_start, int flags,
 			err = dsl_dataset_hold_obj(dp, obj, FTAG, &ds);
 			dsl_pool_config_exit(dp, FTAG);
 			if (err != 0) {
-				if (hard)
-					continue;
-				break;
+				if (!hard)
+					return (err);
+				lasterr = err;
+				continue;
 			}
 			if (ds->ds_phys->ds_prev_snap_txg > txg)
 				txg = ds->ds_phys->ds_prev_snap_txg;
 			err = traverse_dataset(ds, txg, flags, func, arg);
 			dsl_dataset_rele(ds, FTAG);
-			if (err != 0)
-				break;
+			if (err != 0) {
+				if (!hard)
+					return (err);
+				lasterr = err;
+			}
 		}
 	}
 	if (err == ESRCH)
 		err = 0;
-	return (err);
+	return (err != 0 ? err : lasterr);
 }

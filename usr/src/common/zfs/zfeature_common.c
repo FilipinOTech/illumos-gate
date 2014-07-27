@@ -208,6 +208,20 @@ zpool_feature_init(void)
 	    "\"zfs bookmark\" command",
 	    B_TRUE, B_FALSE, B_FALSE, bookmarks_deps);
 
+	zfeature_register(SPA_FEATURE_EMBEDDED_DATA,
+	    "com.delphix:embedded_data", "embedded_data",
+	    "Blocks which compress very well use even less space.",
+	    B_FALSE, B_TRUE, B_TRUE, NULL);
+
+	static const spa_feature_t mooch_byteswap_deps[] = {
+		SPA_FEATURE_EXTENSIBLE_DATASET,
+		SPA_FEATURE_NONE
+	};
+	zfeature_register(SPA_FEATURE_MOOCH_BYTESWAP,
+	    "com.delphix:mooch_byteswap", "mooch_byteswap",
+	    "Clones can store byteswapped user data using 1% the space.",
+	    B_FALSE, B_FALSE, B_FALSE, mooch_byteswap_deps);
+
 	static const spa_feature_t filesystem_limits_deps[] = {
 	    SPA_FEATURE_EXTENSIBLE_DATASET,
 	    SPA_FEATURE_NONE
@@ -216,9 +230,4 @@ zpool_feature_init(void)
 	    "com.joyent:filesystem_limits", "filesystem_limits",
 	    "Filesystem and snapshot limits.", B_TRUE, B_FALSE, B_FALSE,
 	    filesystem_limits_deps);
-
-	zfeature_register(SPA_FEATURE_EMBEDDED_DATA,
-	    "com.delphix:embedded_data", "embedded_data",
-	    "Blocks which compress very well use even less space.",
-	    B_FALSE, B_TRUE, B_TRUE, NULL);
 }

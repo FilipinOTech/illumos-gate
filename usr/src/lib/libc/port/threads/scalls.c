@@ -24,7 +24,10 @@
  * Use is subject to license terms.
  */
 
-/* Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved. */
+/*
+ * Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
+ */
 
 #include "lint.h"
 #include "thr_uberdata.h"
@@ -152,6 +155,15 @@ forkx(int flags)
 	ulwp_t *self = curthread;
 	uberdata_t *udp = self->ul_uberdata;
 	pid_t pid;
+
+	/*
+	 * Audit libraries may not fork as they are effectively part of the
+	 * linker.
+	 */
+	if (self->ul_rtld || !primary_link_map) {
+		errno = ENOTSUP;
+		return (-1);
+	}
 
 	if (self->ul_vfork) {
 		/*
@@ -289,6 +301,15 @@ forkallx(int flags)
 	ulwp_t *self = curthread;
 	uberdata_t *udp = self->ul_uberdata;
 	pid_t pid;
+
+	/*
+	 * Audit libraries may not fork as they are effectively part of the
+	 * linker.
+	 */
+	if (self->ul_rtld || !primary_link_map) {
+		errno = ENOTSUP;
+		return (-1);
+	}
 
 	if (self->ul_vfork) {
 		if (udp->uberflags.uf_mt) {

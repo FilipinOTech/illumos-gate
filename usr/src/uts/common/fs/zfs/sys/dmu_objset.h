@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2013, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  */
 
@@ -109,6 +109,7 @@ struct objset {
 
 	/* Protected by os_lock */
 	kmutex_t os_lock;
+	struct objset *os_origin_mooch_objset;
 	list_t os_dirty_dnodes[TXG_SIZE];
 	list_t os_free_dnodes[TXG_SIZE];
 	list_t os_dnodes;
@@ -131,7 +132,7 @@ struct objset {
 	((os)->os_secondary_cache == ZFS_CACHE_ALL ||		\
 	(os)->os_secondary_cache == ZFS_CACHE_METADATA)
 
-#define	DMU_OS_IS_L2COMPRESSIBLE(os)	(zfs_mdcomp_disable == B_FALSE)
+#define	DMU_OS_IS_L2COMPRESSIBLE(os)	((os)->os_compress != ZIO_COMPRESS_OFF)
 
 /* called from zpl */
 int dmu_objset_hold(const char *name, void *tag, objset_t **osp);
@@ -167,7 +168,9 @@ void dmu_objset_userquota_get_ids(dnode_t *dn, boolean_t before, dmu_tx_t *tx);
 boolean_t dmu_objset_userused_enabled(objset_t *os);
 int dmu_objset_userspace_upgrade(objset_t *os);
 boolean_t dmu_objset_userspace_present(objset_t *os);
+int dmu_objset_mooch_origin(objset_t *clone, objset_t **originp);
 int dmu_fsname(const char *snapname, char *buf);
+int dmu_objset_mooch_obj_refd(objset_t *os, uint64_t obj, uint64_t *objp);
 
 void dmu_objset_init(void);
 void dmu_objset_fini(void);

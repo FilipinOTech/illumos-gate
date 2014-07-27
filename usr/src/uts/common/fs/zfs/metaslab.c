@@ -87,10 +87,10 @@ int zfs_metaslab_condense_block_threshold = 4;
  * group unless all groups in the pool have reached zfs_mg_noalloc_threshold.
  * Once all groups in the pool reach zfs_mg_noalloc_threshold then all
  * groups are allowed to accept allocations. Gang blocks are always
- * eligible to allocate on any metaslab group. The default value of 0 means
+ * eligible to allocate on any metaslab group. A value of 0 means
  * no metaslab group will be excluded based on this criterion.
  */
-int zfs_mg_noalloc_threshold = 0;
+int zfs_mg_noalloc_threshold = 5;
 
 /*
  * Metaslab groups are considered eligible for allocations if their
@@ -154,6 +154,11 @@ int metaslab_load_pct = 50;
 int metaslab_unload_delay = TXG_SIZE * 2;
 
 /*
+ * Should we be willing to write data to degraded vdevs?
+ */
+boolean_t zfs_write_to_degraded = B_FALSE;
+
+/*
  * Max number of metaslabs per group to preload.
  */
 int metaslab_preload_limit = SPA_DVAS_PER_BP;
@@ -162,6 +167,11 @@ int metaslab_preload_limit = SPA_DVAS_PER_BP;
  * Enable/disable preloading of metaslab.
  */
 boolean_t metaslab_preload_enabled = B_TRUE;
+
+/*
+ * Enable/disable additional weight factor for each metaslab.
+ */
+boolean_t metaslab_weight_factor_enable = B_FALSE;
 
 /*
  * Enable/disable fragmentation weighting on metaslabs.
@@ -989,8 +999,27 @@ metaslab_ff_alloc(metaslab_t *msp, uint64_t size)
 	return (metaslab_block_picker(t, cursor, size, align));
 }
 
+/* ARGSUSED */
+static boolean_t
+metaslab_ff_fragmented(metaslab_t *msp)
+{
+	/*
+	 * Find the largest power of 2 block size that evenly divides the
+	 * requested size. This is used to try to allocate blocks with similar
+	 * alignment from the same area of the metaslab (i.e. same cursor
+	 * bucket) but it does not guarantee that other allocations sizes
+	 * may exist in the same region.
+	 */
+	uint64_t align = size & -size;
+	uint64_t *cursor = &msp->ms_lbas[highbit64(align) - 1];
+	avl_tree_t *t = &msp->ms_tree->rt_root;
+
+	return (metaslab_block_picker(t, cursor, size, align));
+}
+
 static metaslab_ops_t metaslab_ff_ops = {
-	metaslab_ff_alloc
+	metaslab_ff_alloc,
+	metaslab_ff_fragmented
 };
 
 /*
@@ -1037,8 +1066,23 @@ metaslab_df_alloc(metaslab_t *msp, uint64_t size)
 	return (metaslab_block_picker(t, cursor, size, 1ULL));
 }
 
+static boolean_t
+metaslab_df_fragmented(metaslab_t *msp)
+{
+	range_tree_t *rt = msp->ms_tree;
+	uint64_t max_size = metaslab_block_maxsize(msp);
+	int free_pct = range_tree_space(rt) * 100 / msp->ms_size;
+
+	if (max_size >= metaslab_df_alloc_threshold &&
+	    free_pct >= metaslab_df_free_pct)
+		return (B_FALSE);
+
+	return (B_TRUE);
+}
+
 static metaslab_ops_t metaslab_df_ops = {
-	metaslab_df_alloc
+	metaslab_df_alloc,
+	metaslab_df_fragmented
 };
 
 /*
@@ -1081,8 +1125,15 @@ metaslab_cf_alloc(metaslab_t *msp, uint64_t size)
 	return (offset);
 }
 
+static boolean_t
+metaslab_cf_fragmented(metaslab_t *msp)
+{
+	return (metaslab_block_maxsize(msp) < metaslab_min_alloc_size);
+}
+
 static metaslab_ops_t metaslab_cf_ops = {
-	metaslab_cf_alloc
+	metaslab_cf_alloc,
+	metaslab_cf_fragmented
 };
 
 /*
@@ -1139,8 +1190,16 @@ metaslab_ndf_alloc(metaslab_t *msp, uint64_t size)
 	return (-1ULL);
 }
 
+static boolean_t
+metaslab_ndf_fragmented(metaslab_t *msp)
+{
+	return (metaslab_block_maxsize(msp) <=
+	    (metaslab_min_alloc_size << metaslab_ndf_clump_shift));
+}
+
 static metaslab_ops_t metaslab_ndf_ops = {
-	metaslab_ndf_alloc
+	metaslab_ndf_alloc,
+	metaslab_ndf_fragmented
 };
 
 metaslab_ops_t *zfs_metaslab_ops = &metaslab_df_ops;
@@ -1306,6 +1365,69 @@ metaslab_fini(metaslab_t *msp)
 	mutex_destroy(&msp->ms_lock);
 
 	kmem_free(msp, sizeof (metaslab_t));
+}
+
+/*
+ * Apply a weighting factor based on the histogram information for this
+ * metaslab. The current weighting factor is somewhat arbitrary and requires
+ * additional investigation. The implementation provides a measure of
+ * "weighted" free space and gives a higher weighting for larger contiguous
+ * regions. The weighting factor is determined by counting the number of
+ * sm_shift sectors that exist in each region represented by the histogram.
+ * That value is then multiplied by the power of 2 exponent and the sm_shift
+ * value.
+ *
+ * For example, assume the 2^21 histogram bucket has 4 2MB regions and the
+ * metaslab has an sm_shift value of 9 (512B):
+ *
+ * 1) calculate the number of sm_shift sectors in the region:
+ *	2^21 / 2^9 = 2^12 = 4096 * 4 (number of regions) = 16384
+ * 2) multiply by the power of 2 exponent and the sm_shift value:
+ *	16384 * 21 * 9 = 3096576
+ * This value will be added to the weighting of the metaslab.
+ */
+static uint64_t
+metaslab_weight_factor(metaslab_t *msp)
+{
+	uint64_t factor = 0;
+	uint64_t sectors;
+	int i;
+
+	/*
+	 * A null space map means that the entire metaslab is free,
+	 * calculate a weight factor that spans the entire size of the
+	 * metaslab.
+	 */
+	if (msp->ms_sm == NULL) {
+		vdev_t *vd = msp->ms_group->mg_vd;
+
+		i = highbit64(msp->ms_size) - 1;
+		sectors = msp->ms_size >> vd->vdev_ashift;
+		return (sectors * i * vd->vdev_ashift);
+	}
+
+	if (msp->ms_sm->sm_dbuf->db_size != sizeof (space_map_phys_t))
+		return (0);
+
+	for (i = 0; i < SPACE_MAP_HISTOGRAM_SIZE(msp->ms_sm); i++) {
+		if (msp->ms_sm->sm_phys->smp_histogram[i] == 0)
+			continue;
+
+		/*
+		 * Determine the number of sm_shift sectors in the region
+		 * indicated by the histogram. For example, given an
+		 * sm_shift value of 9 (512 bytes) and i = 4 then we know
+		 * that we're looking at an 8K region in the histogram
+		 * (i.e. 9 + 4 = 13, 2^13 = 8192). To figure out the
+		 * number of sm_shift sectors (512 bytes in this example),
+		 * we would take 8192 / 512 = 16. Since the histogram
+		 * is offset by sm_shift we can simply use the value of
+		 * of i to calculate this (i.e. 2^i = 16 where i = 4).
+		 */
+		sectors = msp->ms_sm->sm_phys->smp_histogram[i] << i;
+		factor += (i + msp->ms_sm->sm_shift) * sectors;
+	}
+	return (factor * msp->ms_sm->sm_shift);
 }
 
 #define	FRAGMENTATION_TABLE_SIZE	17
@@ -1476,6 +1598,10 @@ metaslab_weight(metaslab_t *msp)
 		weight = 2 * weight - (msp->ms_id * weight) / vd->vdev_ms_count;
 		ASSERT(weight >= space && weight <= 2 * space);
 	}
+
+	msp->ms_factor = metaslab_weight_factor(msp);
+	if (metaslab_weight_factor_enable)
+		weight += msp->ms_factor;
 
 	/*
 	 * If this metaslab is one we're actively using, adjust its
@@ -1691,7 +1817,6 @@ metaslab_condense(metaslab_t *msp, uint64_t txg, dmu_tx_t *tx)
 	ASSERT(MUTEX_HELD(&msp->ms_lock));
 	ASSERT3U(spa_sync_pass(spa), ==, 1);
 	ASSERT(msp->ms_loaded);
-
 
 	spa_dbgmsg(spa, "condensing: txg %llu, msp[%llu] %p, "
 	    "smp size %llu, segments %lu, forcing condense=%s", txg,
@@ -2252,7 +2377,9 @@ top:
 		 */
 		if ((vd->vdev_stat.vs_write_errors > 0 ||
 		    vd->vdev_state < VDEV_STATE_HEALTHY) &&
-		    d == 0 && dshift == 3 && vd->vdev_children == 0) {
+		    d == 0 && dshift == 3 && (vd->vdev_children == 0 ||
+		    !(zfs_write_to_degraded && vd->vdev_state ==
+		    VDEV_STATE_DEGRADED)) ) {
 			all_zero = B_FALSE;
 			goto next;
 		}

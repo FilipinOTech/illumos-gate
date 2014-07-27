@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2013, 2014 by Delphix. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  */
 
@@ -313,8 +313,12 @@ int zfs_deadman_enabled = -1;
  * the block may be dittoed with up to 3 DVAs by ddt_sync().  All together,
  * the worst case is:
  *     (VDEV_RAIDZ_MAXPARITY + 1) * SPA_DVAS_PER_BP * 2 == 24
+ *
+ * DelphixOS does not use RAID-Z or dedup.  The worst case is 3 copies in
+ * the DVAs, and one extra copy for good luck (e.g. ganging, which is not
+ * accounted for in the above "worst case" analysis).
  */
-int spa_asize_inflation = 24;
+int spa_asize_inflation = SPA_DVAS_PER_BP + 1;
 
 /*
  * Normally, we don't allow the last 3.2% (1/(2^spa_slop_shift)) of space in
@@ -1605,13 +1609,19 @@ spa_get_asize(spa_t *spa, uint64_t lsize)
 }
 
 /*
- * Return the amount of slop space in bytes.  It is 1/32 of the pool (3.2%),
- * or at least 32MB.
+ * Return the amount of slop space in bytes.
+ * It is 1/32 of the pool (3.2%), or at least 32MB.
  *
  * See the comment above spa_slop_shift for details.
  */
 uint64_t
 spa_get_slop_space(spa_t *spa) {
+	/*
+	 * Reserve about 1.6% (1/64), or at least 32MB, for allocation
+	 * efficiency.
+	 * XXX The intent log is not accounted for, so it must fit
+	 * within this slop.
+	 */
 	uint64_t space = spa_get_dspace(spa);
 	return (MAX(space >> spa_slop_shift, SPA_MINDEVSIZE >> 1));
 }

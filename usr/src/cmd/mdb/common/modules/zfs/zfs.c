@@ -21,7 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
- * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2013, 2014 by Delphix. All rights reserved.
  */
 
 /* Portions Copyright 2010 Robert Milkowski */
@@ -1088,6 +1088,9 @@ spa_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		"SPARE", "L2CACHE", "UNINIT", "UNAVAIL", "POTENTIAL" };
 	const char *state;
 	int spa_flags = 0;
+	int config = FALSE;
+	int vdevs = FALSE;
+	int errors = FALSE;
 
 	if (mdb_getopts(argc, argv,
 	    'c', MDB_OPT_SETBITS, SPA_FLAG_CONFIG, &spa_flags,
@@ -1559,6 +1562,8 @@ do_print_vdev(uintptr_t addr, int flags, int depth, boolean_t recursive,
 static int
 vdev_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
+	int recursive = FALSE;
+	int stats = FALSE;
 	uint64_t depth = 0;
 	boolean_t recursive = B_FALSE;
 	int spa_flags = 0;
@@ -1689,6 +1694,34 @@ typedef struct mdb_dsl_dir_phys {
 	uint64_t dd_compressed_bytes;
 	uint64_t dd_uncompressed_bytes;
 } mdb_dsl_dir_phys_t;
+
+typedef struct mdb_vdev {
+	uintptr_t vdev_parent;
+	uintptr_t vdev_ms;
+	uint64_t vdev_ms_count;
+	vdev_stat_t vdev_stat;
+} mdb_vdev_t;
+
+typedef struct mdb_space_map_phys_t {
+	uint64_t smp_alloc;
+} mdb_space_map_phys_t;
+
+typedef struct mdb_space_map {
+	uint64_t sm_size;
+	uint64_t sm_alloc;
+	uintptr_t sm_phys;
+} mdb_space_map_t;
+
+typedef struct mdb_range_tree {
+	uint64_t rt_space;
+} mdb_range_tree_t;
+
+typedef struct mdb_metaslab {
+	uintptr_t ms_alloctree[TXG_SIZE];
+	uintptr_t ms_freetree[TXG_SIZE];
+	uintptr_t ms_tree;
+	uintptr_t ms_sm;
+} mdb_metaslab_t;
 
 typedef struct space_data {
 	uint64_t ms_alloctree[TXG_SIZE];
@@ -1909,6 +1942,7 @@ static int
 spa_vdevs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
 	mdb_arg_t v[3];
+	int errors = FALSE;
 	int ret;
 	char opts[100] = "-r";
 	int spa_flags = 0;
@@ -2365,6 +2399,53 @@ zio_walk_root_step(mdb_walk_state_t *wsp)
 		return (WALK_NEXT);
 
 	return (wsp->walk_callback(wsp->walk_addr, &zio, wsp->walk_cbdata));
+}
+
+#define	NICENUM_BUFLEN 6
+
+static int
+snprintfrac(char *buf, int len,
+    uint64_t numerator, uint64_t denom, int frac_digits)
+{
+	int mul = 1;
+	int whole, frac, i;
+
+	for (i = frac_digits; i; i--)
+		mul *= 10;
+	whole = numerator / denom;
+	frac = mul * numerator / denom - mul * whole;
+	return (mdb_snprintf(buf, len, "%u.%0*u", whole, frac_digits, frac));
+}
+
+static void
+mdb_nicenum(uint64_t num, char *buf)
+{
+	uint64_t n = num;
+	int index = 0;
+	char *u;
+
+	while (n >= 1024) {
+		n = (n + (1024 / 2)) / 1024; /* Round up or down */
+		index++;
+	}
+
+	u = &" \0K\0M\0G\0T\0P\0E\0"[index*2];
+
+	if (index == 0) {
+		(void) mdb_snprintf(buf, NICENUM_BUFLEN, "%llu",
+		    (u_longlong_t)n);
+	} else if (n < 10 && (num & (num - 1)) != 0) {
+		(void) snprintfrac(buf, NICENUM_BUFLEN,
+		    num, 1ULL << 10 * index, 2);
+		strcat(buf, u);
+	} else if (n < 100 && (num & (num - 1)) != 0) {
+		(void) snprintfrac(buf, NICENUM_BUFLEN,
+		    num, 1ULL << 10 * index, 1);
+		strcat(buf, u);
+	} else {
+		(void) mdb_snprintf(buf, NICENUM_BUFLEN, "%llu%s",
+		    (u_longlong_t)n, u);
+	}
 }
 
 /*

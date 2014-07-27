@@ -111,8 +111,8 @@ int zfs_delay_min_dirty_percent = 60;
 
 /*
  * This controls how quickly the delay approaches infinity.
- * Larger values cause it to delay less for a given amount of dirty data.
- * Therefore larger values will cause there to be more dirty data for a
+ * Larger values cause it to delay more for a given amount of dirty data.
+ * Therefore larger values will cause there to be less dirty data for a
  * given throughput.
  *
  * For the smoothest delay, this value should be about 1 billion divided

@@ -31,6 +31,7 @@
 #include <sys/dmu.h>
 #include <sys/dnode.h>
 #include <sys/zio.h>
+#include <sys/zfs_debug.h>
 #include <sys/range_tree.h>
 
 static kmem_cache_t *range_seg_cache;

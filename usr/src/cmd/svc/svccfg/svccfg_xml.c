@@ -238,7 +238,7 @@ static const char *lxml_prop_types[] = {
 };
 
 int
-lxml_init()
+lxml_init(void)
 {
 	if (getenv("SVCCFG_NOVALIDATE") == NULL) {
 		/*

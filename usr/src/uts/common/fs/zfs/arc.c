@@ -20,10 +20,10 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2011, 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
- * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2013, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2014 by Saso Kiselkov. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -106,7 +106,7 @@
  * must be made with *no locks held* (to prevent deadlock).  Additionally,
  * the users of callbacks must ensure that their private data is
  * protected from simultaneous callbacks from arc_clear_callback()
- * and arc_do_user_evicts().
+ * (arc_buf_evict() previously) and arc_do_user_evicts().
  *
  * Note that the majority of the performance stats are manipulated
  * with atomic operations.
@@ -200,6 +200,7 @@ int zfs_arc_grow_retry = 0;
 int zfs_arc_shrink_shift = 0;
 int zfs_arc_p_min_shift = 0;
 int zfs_disable_dup_eviction = 0;
+int arc_average_blocksize = 8 * 1024; /* 8KB */
 
 /*
  * Note that buffers can be in one of 6 states:
@@ -3074,7 +3075,7 @@ top:
 		hdr->b_acb = acb;
 		hdr->b_flags |= ARC_IO_IN_PROGRESS;
 
-		if (hdr->b_l2hdr != NULL &&
+		if (HDR_L2CACHE(hdr) && hdr->b_l2hdr != NULL &&
 		    (vd = hdr->b_l2hdr->b_dev->l2ad_vdev) != NULL) {
 			devw = hdr->b_l2hdr->b_dev->l2ad_writing;
 			addr = hdr->b_l2hdr->b_daddr;
@@ -3128,7 +3129,7 @@ top:
 				cb->l2rcb_bp = *bp;
 				cb->l2rcb_zb = *zb;
 				cb->l2rcb_flags = zio_flags;
-				cb->l2rcb_compress = b_compress;
+				cb->l2rcb_compress = hdr->b_l2hdr->b_compress;
 
 				ASSERT(addr >= VDEV_LABEL_START_SIZE &&
 				    addr + size < vd->vdev_psize -
@@ -3140,7 +3141,8 @@ top:
 				 * Issue a null zio if the underlying buffer
 				 * was squashed to zero size by compression.
 				 */
-				if (b_compress == ZIO_COMPRESS_EMPTY) {
+				if (hdr->b_l2hdr->b_compress ==
+				    ZIO_COMPRESS_EMPTY) {
 					rzio = zio_null(pio, spa, vd,
 					    l2arc_read_done, cb,
 					    zio_flags | ZIO_FLAG_DONT_CACHE |
@@ -3149,8 +3151,8 @@ top:
 					    ZIO_FLAG_DONT_RETRY);
 				} else {
 					rzio = zio_read_phys(pio, vd, addr,
-					    b_asize, buf->b_data,
-					    ZIO_CHECKSUM_OFF,
+					    hdr->b_l2hdr->b_asize,
+					    buf->b_data, ZIO_CHECKSUM_OFF,
 					    l2arc_read_done, cb, priority,
 					    zio_flags | ZIO_FLAG_DONT_CACHE |
 					    ZIO_FLAG_CANFAIL |
@@ -3159,7 +3161,8 @@ top:
 				}
 				DTRACE_PROBE2(l2arc__read, vdev_t *, vd,
 				    zio_t *, rzio);
-				ARCSTAT_INCR(arcstat_l2_read_bytes, b_asize);
+				ARCSTAT_INCR(arcstat_l2_read_bytes,
+				    hdr->b_l2hdr->b_asize);
 
 				if (*arc_flags & ARC_NOWAIT) {
 					zio_nowait(rzio);
@@ -3251,6 +3254,10 @@ arc_freed(spa_t *spa, const blkptr_t *bp)
  * will remain cached in the ARC. We make a copy of the arc buffer here so
  * that we can process the callback without holding any locks.
  *
+ * This is used by the DMU to let the ARC know that a buffer is
+ * being evicted, so the ARC should clean up.  If this arc buf
+ * is not yet in the evicted state, it will be put there.
+ *
  * It's possible that the callback is already in the process of being cleared
  * by another thread.  In this case we can not clear the callback.
  *
@@ -3261,6 +3268,7 @@ arc_clear_callback(arc_buf_t *buf)
 {
 	arc_buf_hdr_t *hdr;
 	kmutex_t *hash_lock;
+	arc_buf_t **bufp;
 	arc_evict_func_t *efunc = buf->b_efunc;
 	void *private = buf->b_private;
 
@@ -3274,13 +3282,14 @@ arc_clear_callback(arc_buf_t *buf)
 		mutex_exit(&buf->b_evict_lock);
 		return (B_FALSE);
 	} else if (buf->b_data == NULL) {
+		arc_buf_t copy = *buf; /* structure assignment */
 		/*
 		 * We are on the eviction list; process this buffer now
 		 * but let arc_do_user_evicts() do the reaping.
 		 */
 		buf->b_efunc = NULL;
 		mutex_exit(&buf->b_evict_lock);
-		VERIFY0(efunc(private));
+		VERIFY(copy.b_efunc(&copy) == 0 || efunc(private) == 0);
 		return (B_TRUE);
 	}
 	hash_lock = HDR_LOCK(hdr);
@@ -3291,9 +3300,39 @@ arc_clear_callback(arc_buf_t *buf)
 	ASSERT3U(refcount_count(&hdr->b_refcnt), <, hdr->b_datacnt);
 	ASSERT(hdr->b_state == arc_mru || hdr->b_state == arc_mfu);
 
-	buf->b_efunc = NULL;
-	buf->b_private = NULL;
+	/*
+	 * Pull this buffer off of the hdr
+	 */
+	bufp = &hdr->b_buf;
+	while (*bufp != buf)
+		bufp = &(*bufp)->b_next;
+	*bufp = buf->b_next;
 
+	ASSERT(buf->b_data != NULL);
+	arc_buf_destroy(buf, FALSE, FALSE);
+
+	if (hdr->b_datacnt == 0) {
+		arc_state_t *old_state = hdr->b_state;
+		arc_state_t *evicted_state;
+
+		ASSERT(hdr->b_buf == NULL);
+		ASSERT(refcount_is_zero(&hdr->b_refcnt));
+
+		evicted_state =
+		    (old_state == arc_mru) ? arc_mru_ghost : arc_mfu_ghost;
+
+		mutex_enter(&old_state->arcs_mtx);
+		mutex_enter(&evicted_state->arcs_mtx);
+
+		arc_change_state(evicted_state, hdr, hash_lock);
+		ASSERT(HDR_IN_HASH_TABLE(hdr));
+		hdr->b_flags |= ARC_IN_HASH_TABLE;
+		hdr->b_flags &= ~ARC_BUF_AVAILABLE;
+
+		mutex_exit(&evicted_state->arcs_mtx);
+		mutex_exit(&old_state->arcs_mtx);
+	}
+	mutex_exit(hash_lock);
 	if (hdr->b_datacnt > 1) {
 		mutex_exit(&buf->b_evict_lock);
 		arc_buf_destroy(buf, FALSE, TRUE);
@@ -3302,9 +3341,12 @@ arc_clear_callback(arc_buf_t *buf)
 		hdr->b_flags |= ARC_BUF_AVAILABLE;
 		mutex_exit(&buf->b_evict_lock);
 	}
-
-	mutex_exit(hash_lock);
-	VERIFY0(efunc(private));
+	VERIFY(buf->b_efunc(buf) == 0 || efunc(private) == 0);
+	buf->b_efunc = NULL;
+	buf->b_private = NULL;
+	buf->b_hdr = NULL;
+	buf->b_next = NULL;
+	kmem_cache_free(buf_cache, buf);
 	return (B_TRUE);
 }
 
@@ -3434,6 +3476,7 @@ arc_release(arc_buf_t *buf, void *tag)
 		ARCSTAT_INCR(arcstat_l2_asize, -l2hdr->b_asize);
 		vdev_space_update(l2hdr->b_dev->l2ad_vdev,
 		    -l2hdr->b_asize, 0, 0);
+		list_remove(l2hdr->b_dev->l2ad_buflist, hdr);
 		kmem_free(l2hdr, sizeof (l2arc_buf_hdr_t));
 		ARCSTAT_INCR(arcstat_l2_size, -buf_size);
 		mutex_exit(&l2arc_buflist_mtx);
@@ -3449,6 +3492,17 @@ arc_released(arc_buf_t *buf)
 	released = (buf->b_data != NULL && buf->b_hdr->b_state == arc_anon);
 	mutex_exit(&buf->b_evict_lock);
 	return (released);
+}
+
+int
+arc_has_callback(arc_buf_t *buf)
+{
+	int callback;
+
+	mutex_enter(&buf->b_evict_lock);
+	callback = (buf->b_efunc != NULL);
+	mutex_exit(&buf->b_evict_lock);
+	return (callback);
 }
 
 #ifdef ZFS_DEBUG
@@ -4792,6 +4846,8 @@ l2arc_write_buffers(spa_t *spa, l2arc_dev_t *dev, uint64_t target_sz,
 	 * l2arc_evict() will already have evicted ahead for this case.
 	 */
 	if (dev->l2ad_hand >= (dev->l2ad_end - target_sz)) {
+		vdev_space_update(dev->l2ad_vdev,
+		    dev->l2ad_end - dev->l2ad_hand, 0, 0);
 		dev->l2ad_hand = dev->l2ad_start;
 		dev->l2ad_evict = dev->l2ad_start;
 		dev->l2ad_first = B_FALSE;

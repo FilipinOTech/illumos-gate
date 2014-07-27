@@ -207,7 +207,7 @@ dsl_dataset_user_release_onexit(void *arg)
 		return;
 	}
 
-	(void) dsl_dataset_user_release_tmp(spa_get_dsl(spa), ca->zhca_holds);
+	dsl_dataset_user_release_tmp(spa_get_dsl(spa), ca->zhca_holds);
 	fnvlist_free(ca->zhca_holds);
 	kmem_free(ca, sizeof (zfs_hold_cleanup_arg_t));
 	spa_close(spa, FTAG);

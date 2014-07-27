@@ -12,6 +12,7 @@
 #
 # Copyright 2011, Richard Lowe
 # Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+# Copyright (c) 2012 by Delphix. All rights reserved.
 #
 
 include		$(SRC)/Makefile.master
@@ -113,14 +114,12 @@ _MANFILES=	Intro.4				\
 		mech.4				\
 		meddb.4				\
 		mnttab.4			\
-		mod_ipp.4			\
 		mpapi.conf.4			\
 		nca.if.4			\
 		ncad_addr.4			\
 		ncakmod.conf.4			\
 		ncalogd.conf.4			\
 		ncaport.conf.4			\
-		ndmp.4				\
 		ndpd.conf.4			\
 		netconfig.4			\
 		netgroup.4			\
@@ -195,7 +194,7 @@ _MANFILES=	Intro.4				\
 		system.4			\
 		term.4				\
 		terminfo.4			\
-		timezone.4			\
+		timezone_db.4			\
 		tnf_kernel_probes.4		\
 		ts_dptbl.4			\
 		ttydefs.4			\

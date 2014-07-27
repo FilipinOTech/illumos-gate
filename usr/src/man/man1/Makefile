@@ -11,6 +11,7 @@
 
 #
 # Copyright 2011, Richard Lowe
+# Copyright (c) 2012, OmniTI Computer Consulting, Inc. All rights reserved.
 # Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
@@ -412,6 +413,7 @@ MANFILES=	acctcom.1			\
 	 	w.1				\
 	 	wait.1				\
 	 	wc.1				\
+		whatis.1			\
 	 	which.1				\
 	 	who.1				\
 	 	whocalls.1			\
