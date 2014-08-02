@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
  */
 
 /*
@@ -1309,8 +1310,7 @@ ndmp_stop_local_reader(ndmpd_session_t *session, tlm_commands_t *cmds)
 {
 	ndmp_lbr_params_t *nlp;
 
-	if (session != NULL && session->ns_data.dd_sock == -1) {
-		/* 2-way restore */
+	if (session != NULL) {
 		if (cmds != NULL && cmds->tcs_reader_count > 0) {
 			if ((nlp = ndmp_get_nlp(session)) != NULL) {
 				(void) mutex_lock(&nlp->nlp_mtx);

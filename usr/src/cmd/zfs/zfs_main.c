@@ -63,6 +63,7 @@
 #include <libuutil.h>
 #include <aclutils.h>
 #include <directory.h>
+#include <idmap.h>
 
 #include "zfs_iter.h"
 #include "zfs_util.h"
@@ -245,9 +246,10 @@ get_usage(zfs_help_t idx)
 	case HELP_PROMOTE:
 		return (gettext("\tpromote <clone-filesystem>\n"));
 	case HELP_RECEIVE:
-		return (gettext("\treceive [-vnFu] <filesystem|volume|"
-		"snapshot>\n"
-		"\treceive [-vnFu] [-d | -e] <filesystem>\n"));
+		return (gettext("\treceive [-vnFu] [-d | -e] "
+		    "[-o <property=value>]... [-x <property>]...\n"
+		    "\t    [-l <filesystem|volume>]... <filesystem|volume"
+		    "|snapshot>\n"));
 	case HELP_RENAME:
 		return (gettext("\trename [-f] <filesystem|volume|snapshot> "
 		    "<filesystem|volume|snapshot>\n"
@@ -256,7 +258,7 @@ get_usage(zfs_help_t idx)
 	case HELP_ROLLBACK:
 		return (gettext("\trollback [-rRf] <snapshot>\n"));
 	case HELP_SEND:
-		return (gettext("\tsend [-DnPpRve] [-[iI] snapshot] "
+		return (gettext("\tsend [-DnPpRves] [-[iI] snapshot] "
 		    "<snapshot>\n"
 		    "\tsend [-e] [-i snapshot|bookmark] "
 		    "<filesystem|volume|snapshot>\n"));
@@ -476,10 +478,22 @@ usage(boolean_t requested)
 	exit(requested ? 0 : 2);
 }
 
-static int
-parseprop(nvlist_t *props)
+/*
+ * Add parameter to the list if it's not in there already
+ */
+static void
+add_unique_option(nvlist_t *props, char *propname)
 {
-	char *propname = optarg;
+	if (nvlist_lookup_string(props, propname, NULL) != 0) {
+		if (nvlist_add_boolean(props, propname) != 0) {
+			nomem();
+		}
+	}
+}
+
+static int
+parseprop(nvlist_t *props, char *propname)
+{
 	char *propval, *strval;
 
 	if ((propval = strchr(propname, '=')) == NULL) {
@@ -508,7 +522,7 @@ parse_depth(char *opt, int *flags)
 	depth = (int)strtol(opt, &tmp, 0);
 	if (*tmp) {
 		(void) fprintf(stderr,
-		    gettext("%s is not an integer\n"), optarg);
+		    gettext("%s is not an integer\n"), opt);
 		usage(B_FALSE);
 	}
 	if (depth < 0) {
@@ -600,7 +614,7 @@ zfs_do_clone(int argc, char **argv)
 	while ((c = getopt(argc, argv, "o:p")) != -1) {
 		switch (c) {
 		case 'o':
-			if (parseprop(props))
+			if (parseprop(props, optarg))
 				return (1);
 			break;
 		case 'p':
@@ -747,7 +761,7 @@ zfs_do_create(int argc, char **argv)
 				nomem();
 			break;
 		case 'o':
-			if (parseprop(props))
+			if (parseprop(props, optarg))
 				goto error;
 			break;
 		case 's':
@@ -2017,6 +2031,7 @@ upgrade_set_callback(zfs_handle_t *zhp, void *data)
 			 * the normal history logging that happens in main().
 			 */
 			(void) zpool_log_history(g_zfs, history_str);
+			verify(zpool_stage_history(g_zfs, history_str) == 0);
 			log_history = B_FALSE;
 		}
 		if (zfs_prop_set(zhp, "version", verstr) == 0)
@@ -2372,9 +2387,9 @@ userspace_cb(void *arg, const char *domain, uid_t rid, uint64_t space)
 		/* SMB */
 		char sid[ZFS_MAXNAMELEN + 32];
 		uid_t id;
-		uint64_t classes;
 		int err;
-		directory_error_t e;
+		int flag = IDMAP_REQ_FLG_USE_CACHE;
+		idmap_stat stat;
 
 		smbentity = B_TRUE;
 
@@ -2391,11 +2406,13 @@ userspace_cb(void *arg, const char *domain, uid_t rid, uint64_t space)
 		if (err == 0) {
 			rid = id;
 			if (!cb->cb_sid2posix) {
-				e = directory_name_from_sid(NULL, sid, &name,
-				    &classes);
-				if (e != NULL)
-					directory_error_free(e);
-				if (name == NULL)
+				if (type == USTYPE_SMB_USR)
+					stat = idmap_getwinnamebyuid(rid, flag,
+					    &name, NULL);
+				else
+					stat = idmap_getwinnamebygid(rid, flag,
+					    &name, NULL);
+				if (stat != IDMAP_SUCCESS || name == NULL)
 					name = sid;
 			}
 		}
@@ -3568,7 +3585,7 @@ zfs_do_snapshot(int argc, char **argv)
 	while ((c = getopt(argc, argv, "ro:")) != -1) {
 		switch (c) {
 		case 'o':
-			if (parseprop(props))
+			if (parseprop(props, optarg))
 				return (1);
 			break;
 		case 'r':
@@ -3640,7 +3657,7 @@ zfs_do_send(int argc, char **argv)
 	boolean_t extraverbose = B_FALSE;
 
 	/* check options */
-	while ((c = getopt(argc, argv, ":i:I:RDpvnPe")) != -1) {
+	while ((c = getopt(argc, argv, ":i:I:RDpvnPes")) != -1) {
 		switch (c) {
 		case 'i':
 			if (fromname)
@@ -3678,6 +3695,9 @@ zfs_do_send(int argc, char **argv)
 		case 'e':
 			flags.embed_data = B_TRUE;
 			break;
+		case 's':
+			flags.sendsize = B_TRUE;
+			break;
 		case ':':
 			(void) fprintf(stderr, gettext("missing argument for "
 			    "'%c' option\n"), optopt);
@@ -3703,7 +3723,17 @@ zfs_do_send(int argc, char **argv)
 		usage(B_FALSE);
 	}
 
-	if (!flags.dryrun && isatty(STDOUT_FILENO)) {
+	if (flags.sendsize) {
+		int fd = open("/dev/null", O_WRONLY|O_LARGEFILE);
+		if (fd < 0) {
+			perror("failed to open /dev/null");
+			return (1);
+		}
+		if ((dup2(fd, STDOUT_FILENO)) < 0) {
+			perror("failed to dup2(/dev/null,STDOUT_FILENO)");
+			return (1);
+		}
+	} else if (!flags.dryrun && isatty(STDOUT_FILENO)) {
 		(void) fprintf(stderr,
 		    gettext("Error: Stream can not be written to a terminal.\n"
 		    "You must redirect standard output.\n"));
@@ -3821,10 +3851,15 @@ static int
 zfs_do_receive(int argc, char **argv)
 {
 	int c, err;
+	nvlist_t *exprops, *limitds;
 	recvflags_t flags = { 0 };
+	if (nvlist_alloc(&exprops, NV_UNIQUE_NAME, 0) != 0)
+		nomem();
+	if (nvlist_alloc(&limitds, NV_UNIQUE_NAME, 0) != 0)
+		nomem();
 
 	/* check options */
-	while ((c = getopt(argc, argv, ":denuvF")) != -1) {
+	while ((c = getopt(argc, argv, ":del:no:uvx:F")) != -1) {
 		switch (c) {
 		case 'd':
 			flags.isprefix = B_TRUE;
@@ -3833,14 +3868,26 @@ zfs_do_receive(int argc, char **argv)
 			flags.isprefix = B_TRUE;
 			flags.istail = B_TRUE;
 			break;
+		case 'l':
+			add_unique_option(limitds, optarg);
+			break;
 		case 'n':
 			flags.dryrun = B_TRUE;
+			break;
+		case 'o':
+			if (parseprop(exprops, optarg)) {
+				err = 1;
+				goto recverror;
+			}
 			break;
 		case 'u':
 			flags.nomount = B_TRUE;
 			break;
 		case 'v':
 			flags.verbose = B_TRUE;
+			break;
+		case 'x':
+			add_unique_option(exprops, optarg);
 			break;
 		case 'F':
 			flags.force = B_TRUE;
@@ -3878,7 +3925,12 @@ zfs_do_receive(int argc, char **argv)
 		return (1);
 	}
 
-	err = zfs_receive(g_zfs, argv[0], &flags, STDIN_FILENO, NULL);
+	err = zfs_receive(g_zfs, argv[0], &flags, STDIN_FILENO, exprops,
+	    limitds, NULL);
+
+recverror:
+	nvlist_free(exprops);
+	nvlist_free(limitds);
 
 	return (err != 0);
 }
@@ -6746,6 +6798,7 @@ main(int argc, char **argv)
 	}
 
 	zfs_save_arguments(argc, argv, history_str, sizeof (history_str));
+	verify(zpool_stage_history(g_zfs, history_str) == 0);
 
 	libzfs_print_on_error(g_zfs, B_TRUE);
 

@@ -20,8 +20,8 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef _SYS_SPA_IMPL_H
@@ -38,12 +38,20 @@
 #include <sys/refcount.h>
 #include <sys/bplist.h>
 #include <sys/bpobj.h>
+#include <sys/special_impl.h>
+#include <sys/wrcache.h>
 #include <sys/zfeature.h>
 #include <zfeature_common.h>
 
 #ifdef	__cplusplus
 extern "C" {
 #endif
+
+/*
+ * This (illegal) pool name is used when temporarily importing a spa_t in order
+ * to get the vdev stats associated with the imported devices.
+ */
+#define	TRYIMPORT_NAME	"$import"
 
 typedef struct spa_error_entry {
 	zbookmark_phys_t	se_bookmark;
@@ -114,6 +122,68 @@ typedef struct spa_taskqs {
 	taskq_t **stqs_taskq;
 } spa_taskqs_t;
 
+typedef enum spa_watermark {
+	SPA_WM_NONE,
+	SPA_WM_LOW,
+	SPA_WM_HIGH
+} spa_watermark_t;
+
+/* Tunables and default values for special/normal class selection */
+extern boolean_t spa_special_selection_enable;
+
+#define	SPA_SPECIAL_RATIO	1024
+#define	SPA_SPECIAL_RATIO_MIN	1
+#define	SPA_SPECIAL_RATIO_MAX	(1ULL<<43)
+#define	SPA_SPECIAL_ADJUSTMENT	2
+#define	SPA_SPECIAL_UTILIZATION	70
+
+typedef enum {
+	SPA_SPECIAL_SELECTION_MIN,
+	SPA_SPECIAL_SELECTION_LATENCY,
+	SPA_SPECIAL_SELECTION_THROUGHPUT,
+	SPA_SPECIAL_SELECTION_LATENCY_BIAS,
+	SPA_SPECIAL_SELECTION_THROUGHPUT_BIAS,
+	SPA_SPECIAL_SELECTION_MAX
+} spa_special_selection_t;
+
+#define	SPA_SPECIAL_SELECTION_VALID(sel)	\
+	(((sel) > SPA_SPECIAL_SELECTION_MIN) &&	\
+	    ((sel) < SPA_SPECIAL_SELECTION_MAX))
+
+typedef struct spa_special_stat {
+	int special_ut;
+	int normal_ut;
+	hrtime_t normal_lt;
+	hrtime_t special_lt;
+} spa_special_stat_t;
+
+typedef struct spa_perfmon_data {
+	kthread_t		*perfmon_thread;
+	boolean_t		perfmon_thr_exit;
+	kmutex_t		perfmon_lock;
+	kcondvar_t		perfmon_cv;
+} spa_perfmon_data_t;
+
+typedef struct spa_meta_placement {
+	uint64_t spa_enable_meta_placement_selection;
+	uint64_t spa_ddt_to_special;
+	uint64_t spa_general_meta_to_special;
+	uint64_t spa_other_meta_to_special;
+} spa_meta_placement_t;
+
+
+/*
+ * SPA info copied from spa_t and optionally from vdev_t that is provided
+ * with pool and vdev sysevents
+ */
+typedef struct {
+	char *event_name;
+	char *spa_name;
+	char *vdev_path;
+	uint64_t spa_guid;
+	uint64_t vdev_guid;
+} spa_einfo_t;
+
 struct spa {
 	/*
 	 * Fields protected by spa_namespace_lock.
@@ -137,6 +207,7 @@ struct spa {
 	boolean_t	spa_is_initializing;	/* true while opening pool */
 	metaslab_class_t *spa_normal_class;	/* normal data class */
 	metaslab_class_t *spa_log_class;	/* intent log data class */
+	metaslab_class_t *spa_special_class;	/* special usage class */
 	uint64_t	spa_first_txg;		/* first txg after spa_open() */
 	uint64_t	spa_final_txg;		/* txg of export/destroy */
 	uint64_t	spa_freeze_txg;		/* freeze pool at this txg */
@@ -200,6 +271,10 @@ struct spa {
 	vdev_t		*spa_pending_vdev;	/* pending vdev additions */
 	kmutex_t	spa_props_lock;		/* property lock */
 	uint64_t	spa_pool_props_object;	/* object for properties */
+	kmutex_t	spa_cos_props_lock;	/* property lock */
+	uint64_t	spa_cos_props_object;	/* object for cos properties */
+	kmutex_t	spa_vdev_props_lock;	/* property lock */
+	uint64_t	spa_vdev_props_object;	/* object for vdev properties */
 	uint64_t	spa_bootfs;		/* default boot filesystem */
 	uint64_t	spa_failmode;		/* failure mode for the pool */
 	uint64_t	spa_delegation;		/* delegation on/off */
@@ -255,15 +330,78 @@ struct spa {
 
 	hrtime_t	spa_ccw_fail_time;	/* Conf cache write fail time */
 
+	/* specialclass support */
+	boolean_t	spa_usesc;		/* enable special class */
+	spa_specialclass_t spa_specialclass;	/* class of special device */
+	uint64_t	spa_lowat;		/* low watermark percent */
+	uint64_t	spa_hiwat;		/* high watermark percent */
+	uint64_t	spa_lwm_space;		/* low watermark */
+	uint64_t	spa_hwm_space;		/* high watermark */
+	uint64_t	spa_wrc_wm_range;	/* high wm - low wm */
+	uint8_t		spa_wrc_perc;		/* percent of writes to spec. */
+	spa_watermark_t	spa_watermark;
+	boolean_t	spa_enable_specialclass;
+
+	/* wrcache thread. */
+	wrc_data_t	spa_wrc;
+	wrc_route_t	spa_wrc_route;
+
+	/* cos list */
+	list_t		spa_cos_list;
+
 	/*
-	 * spa_refcount & spa_config_lock must be the last elements
+	 * latency stats per metaslab_class to aid dynamic balancing of io
+	 * across normal and special classes
+	 */
+	uint64_t		spa_special_stat_rotor;
+	spa_special_stat_t	spa_special_stat;
+
+	spa_perfmon_data_t	spa_perfmon;
+
+	/*
+	 * ratio of writes to special class vs writes to normal class;
+	 * if the ratio is N, then N-1 writes go to special and 1 to normal
+	 * the ratio is adjusted dynamically by the factor specified below
+	 * depending on the relation between average perf param for normal and
+	 * special classes; the parameters are either latency or throughput
+	 */
+	uint64_t spa_special_to_normal_ratio;
+
+	/* target percentage of data to be considered for dedup */
+	int spa_dedup_percentage;
+	uint64_t spa_dedup_rotor;
+
+	/*
+	 * spa_refcnt & spa_config_lock must be the last elements
 	 * because refcount_t changes size based on compilation options.
 	 * In order for the MDB module to function correctly, the other
 	 * fields must remain in the same location.
 	 */
 	spa_config_lock_t spa_config_lock[SCL_LOCKS]; /* config changes */
 	refcount_t	spa_refcount;		/* number of opens */
+
+	uint64_t spa_ddt_meta_copies; /* amount of ddt-metadata copies */
+
+	/*
+	 * The following two fields are designed to restrict the distribution
+	 * of the deduplication entries. There are two possible states of these
+	 * vars:
+	 * 1) min=DITTO, max=DUPLICATED - it provides the old behavior
+	 * 2) min=DUPLICATED, MAX=DUPLICATED - new behavior: all entries into
+	 * the single zap.
+	 */
+	enum ddt_class spa_ddt_class_min;
+	enum ddt_class spa_ddt_class_max;
+
+	spa_meta_placement_t spa_meta_policy;
+
+	uint64_t spa_dedup_best_effort;
+	uint64_t spa_dedup_lo_best_effort;
+	uint64_t spa_dedup_hi_best_effort;
 };
+
+/* spa sysevent taskq */
+extern taskq_t *spa_sysevent_taskq;
 
 extern const char *spa_config_path;
 

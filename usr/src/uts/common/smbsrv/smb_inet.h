@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -34,7 +36,7 @@
 extern "C" {
 #endif
 
-#ifndef _KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 #include <inet/tcp.h>
 #include <arpa/inet.h>
 #endif /* !_KERNEL */
@@ -42,6 +44,10 @@ extern "C" {
 #include <sys/socket.h>
 #include <netinet/in.h>
 
+/*
+ * SMB (internal) representation of an IP address.
+ * See also: smb_inaddr_xdr()
+ */
 typedef struct smb_inaddr {
 	union {
 		in_addr_t au_ipv4;

@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <syslog.h>
@@ -48,10 +49,9 @@ static cond_t smbd_dc_cv;
 
 static void *smbd_dc_monitor(void *);
 static void smbd_dc_update(void);
-static boolean_t smbd_set_netlogon_cred(void);
-static int smbd_get_kpasswd_srv(char *, size_t);
-static uint32_t smbd_join_workgroup(smb_joininfo_t *);
-static uint32_t smbd_join_domain(smb_joininfo_t *);
+/* Todo: static boolean_t smbd_set_netlogon_cred(void); */
+static void smbd_join_workgroup(smb_joininfo_t *, smb_joinres_t *);
+static void smbd_join_domain(smb_joininfo_t *, smb_joinres_t *);
 
 /*
  * Launch the DC discovery and monitor thread.
@@ -78,26 +78,21 @@ smbd_dc_monitor_init(void)
 	return (rc);
 }
 
+/*
+ * Refresh the DC monitor.  Called from SMF refresh and when idmap
+ * finds a different DC from what we were using previously.
+ * Update our domain (and current DC) information.
+ */
 void
 smbd_dc_monitor_refresh(void)
 {
-	char		site[MAXHOSTNAMELEN];
-	smb_inaddr_t	pdc;
 
-	site[0] = '\0';
-	bzero(&pdc, sizeof (smb_inaddr_t));
-	(void) smb_config_getstr(SMB_CI_ADS_SITE, site, MAXHOSTNAMELEN);
-	(void) smb_config_getip(SMB_CI_DOMAIN_SRV, &pdc);
+	syslog(LOG_INFO, "smbd_dc_monitor_refresh");
 
 	(void) mutex_lock(&smbd_dc_mutex);
 
-	if ((bcmp(&smbd.s_pdc, &pdc, sizeof (smb_inaddr_t)) != 0) ||
-	    (smb_strcasecmp(smbd.s_site, site, 0) != 0)) {
-		bcopy(&pdc, &smbd.s_pdc, sizeof (smb_inaddr_t));
-		(void) strlcpy(smbd.s_site, site, MAXHOSTNAMELEN);
-		smbd.s_pdc_changed = B_TRUE;
-		(void) cond_signal(&smbd_dc_cv);
-	}
+	smbd.s_pdc_changed = B_TRUE;
+	(void) cond_signal(&smbd_dc_cv);
 
 	(void) mutex_unlock(&smbd_dc_mutex);
 }
@@ -106,8 +101,8 @@ smbd_dc_monitor_refresh(void)
 static void *
 smbd_dc_monitor(void *arg)
 {
-	boolean_t	ds_not_responding = B_FALSE;
-	boolean_t	ds_cfg_changed = B_FALSE;
+	boolean_t	ds_not_responding;
+	boolean_t	ds_cfg_changed;
 	timestruc_t	delay;
 	int		i;
 
@@ -115,6 +110,8 @@ smbd_dc_monitor(void *arg)
 	smbd_online_wait("smbd_dc_monitor");
 
 	while (smbd_online()) {
+		ds_not_responding = B_FALSE;
+		ds_cfg_changed = B_FALSE;
 		delay.tv_sec = SMBD_DC_MONITOR_INTERVAL;
 		delay.tv_nsec = 0;
 
@@ -127,6 +124,9 @@ smbd_dc_monitor(void *arg)
 		}
 
 		(void) mutex_unlock(&smbd_dc_mutex);
+
+		if (ds_cfg_changed)
+			goto rediscover;
 
 		for (i = 0; i < SMBD_DC_MONITOR_ATTEMPTS; ++i) {
 			if (dssetup_check_service() == 0) {
@@ -143,8 +143,8 @@ smbd_dc_monitor(void *arg)
 			    "smbd_dc_monitor: domain service not responding");
 
 		if (ds_not_responding || ds_cfg_changed) {
-			ds_cfg_changed = B_FALSE;
-			smb_ads_refresh();
+		rediscover:
+			smb_ads_refresh(ds_not_responding);
 			smbd_dc_update();
 		}
 	}
@@ -164,37 +164,39 @@ smbd_dc_update(void)
 {
 	char		domain[MAXHOSTNAMELEN];
 	smb_domainex_t	info;
-	smb_domain_t	*primary;
-
+	smb_domain_t	*di;
+	DWORD		status;
 
 	if (smb_getfqdomainname(domain, MAXHOSTNAMELEN) != 0) {
 		(void) smb_getdomainname(domain, MAXHOSTNAMELEN);
-		(void) smb_strupr(domain);
+	}
+	if (domain[0] == '\0') {
+		smb_log(smbd.s_loghd, LOG_NOTICE,
+		    "smbd_dc_update: no domain name set");
+		return;
 	}
 
 	if (!smb_locate_dc(domain, "", &info)) {
 		smb_log(smbd.s_loghd, LOG_NOTICE,
 		    "smbd_dc_update: %s: locate failed", domain);
-	} else {
-		primary = &info.d_primary;
-
-		smb_config_setdomaininfo(primary->di_nbname,
-		    primary->di_fqname,
-		    primary->di_sid,
-		    primary->di_u.di_dns.ddi_forest,
-		    primary->di_u.di_dns.ddi_guid);
-
-		smb_log(smbd.s_loghd, LOG_NOTICE,
-		    "smbd_dc_update: %s: located %s", domain, info.d_dc);
+		return;
 	}
 
-	if (smbd_set_netlogon_cred()) {
+	di = &info.d_primary;
+	smb_log(smbd.s_loghd, LOG_INFO,
+	    "smbd_dc_update: %s: located %s", domain, info.d_dc);
+
+	status = mlsvc_netlogon(info.d_dc, di->di_nbname);
+	if (status != NT_STATUS_SUCCESS) {
+		syslog(LOG_NOTICE,
+		    "failed to establish NETLOGON credential chain");
+
 		/*
 		 * Restart required because the domain changed
 		 * or the credential chain setup failed.
 		 */
 		smb_log(smbd.s_loghd, LOG_NOTICE,
-		    "smbd_dc_update: %s: smb/server restart required");
+		    "smbd_dc_update: smb/server restart required");
 
 		if (smb_smf_restart_service() != 0)
 			smb_log(smbd.s_loghd, LOG_ERR,
@@ -211,164 +213,18 @@ smbd_dc_update(void)
  * If the security mode or domain name is being changed,
  * the caller must restart the service.
  */
-uint32_t
-smbd_join(smb_joininfo_t *info)
+void
+smbd_join(smb_joininfo_t *info, smb_joinres_t *res)
 {
-	uint32_t status;
-
 	dssetup_clear_domain_info();
 	if (info->mode == SMB_SECMODE_WORKGRP)
-		status = smbd_join_workgroup(info);
+		smbd_join_workgroup(info, res);
 	else
-		status = smbd_join_domain(info);
-
-	return (status);
+		smbd_join_domain(info, res);
 }
 
-/*
- * smbd_set_netlogon_cred
- *
- * If the system is joined to an AD domain via kclient, SMB daemon will need
- * to establish the NETLOGON credential chain.
- *
- * Since the kclient has updated the machine password stored in SMF
- * repository, the cached ipc_info must be updated accordingly by calling
- * smb_ipc_commit.
- *
- * Due to potential replication delays in a multiple DC environment, the
- * NETLOGON rpc request must be sent to the DC, to which the KPASSWD request
- * is sent. If the DC discovered by the SMB daemon is different than the
- * kpasswd server, the current connection with the DC will be torn down
- * and a DC discovery process will be triggered to locate the kpasswd
- * server.
- *
- * If joining a new domain, the domain_name property must be set after a
- * successful credential chain setup.
- */
-static boolean_t
-smbd_set_netlogon_cred(void)
-{
-	char kpasswd_srv[MAXHOSTNAMELEN];
-	char kpasswd_domain[MAXHOSTNAMELEN];
-	char sam_acct[SMB_SAMACCT_MAXLEN];
-	char ipc_usr[SMB_USERNAME_MAXLEN];
-	char *dom;
-	boolean_t new_domain = B_FALSE;
-	smb_domainex_t dxi;
-	smb_domain_t *di;
-
-	if (smb_match_netlogon_seqnum())
-		return (B_FALSE);
-
-	(void) smb_config_getstr(SMB_CI_KPASSWD_SRV, kpasswd_srv,
-	    sizeof (kpasswd_srv));
-
-	if (*kpasswd_srv == '\0')
-		return (B_FALSE);
-
-	/*
-	 * If the domain join initiated by smbadm join CLI is in
-	 * progress, don't do anything.
-	 */
-	(void) smb_getsamaccount(sam_acct, sizeof (sam_acct));
-	smb_ipc_get_user(ipc_usr, SMB_USERNAME_MAXLEN);
-	if (smb_strcasecmp(ipc_usr, sam_acct, 0))
-		return (B_FALSE);
-
-	di = &dxi.d_primary;
-	if (!smb_domain_getinfo(&dxi))
-		(void) smb_getfqdomainname(di->di_fqname, MAXHOSTNAMELEN);
-
-	(void) smb_config_getstr(SMB_CI_KPASSWD_DOMAIN, kpasswd_domain,
-	    sizeof (kpasswd_domain));
-
-	if (*kpasswd_domain != '\0' &&
-	    smb_strcasecmp(kpasswd_domain, di->di_fqname, 0)) {
-		dom = kpasswd_domain;
-		new_domain = B_TRUE;
-	} else {
-		dom = di->di_fqname;
-	}
-
-	/*
-	 * DC discovery will be triggered if the domain info is not
-	 * currently cached or the SMB daemon has previously discovered a DC
-	 * that is different than the kpasswd server.
-	 */
-	if (new_domain || smb_strcasecmp(dxi.d_dc, kpasswd_srv, 0) != 0) {
-		if (*dxi.d_dc != '\0')
-			mlsvc_disconnect(dxi.d_dc);
-
-		if (!smb_locate_dc(dom, kpasswd_srv, &dxi)) {
-			if (!smb_locate_dc(di->di_fqname, "", &dxi)) {
-				smb_ipc_commit();
-				return (B_FALSE);
-			}
-		}
-	}
-
-	smb_ipc_commit();
-	if (mlsvc_netlogon(dxi.d_dc, di->di_nbname)) {
-		syslog(LOG_NOTICE,
-		    "failed to establish NETLOGON credential chain");
-		return (B_TRUE);
-	} else {
-		if (new_domain) {
-			smb_config_setdomaininfo(di->di_nbname, di->di_fqname,
-			    di->di_sid,
-			    di->di_u.di_dns.ddi_forest,
-			    di->di_u.di_dns.ddi_guid);
-			(void) smb_config_setstr(SMB_CI_KPASSWD_DOMAIN, "");
-		}
-	}
-
-	return (new_domain);
-}
-
-/*
- * Retrieve the kpasswd server from krb5.conf.
- *
- * Initialization of the locate dc thread.
- * Returns 0 on success, an error number if thread creation fails.
- */
-static int
-smbd_get_kpasswd_srv(char *srv, size_t len)
-{
-	FILE *fp;
-	static char buf[512];
-	char *p;
-
-	*srv = '\0';
-	p = getenv("KRB5_CONFIG");
-	if (p == NULL || *p == '\0')
-		p = "/etc/krb5/krb5.conf";
-
-	if ((fp = fopen(p, "r")) == NULL)
-		return (-1);
-
-	while (fgets(buf, sizeof (buf), fp)) {
-
-		/* Weed out any comment text */
-		(void) trim_whitespace(buf);
-		if (*buf == '#')
-			continue;
-
-		if ((p = strstr(buf, "kpasswd_server")) != NULL) {
-			if ((p = strchr(p, '=')) != NULL) {
-				(void) trim_whitespace(++p);
-				(void) strlcpy(srv, p, len);
-			}
-			break;
-		}
-	}
-
-
-	(void) fclose(fp);
-	return ((*srv == '\0') ? -1 : 0);
-}
-
-static uint32_t
-smbd_join_workgroup(smb_joininfo_t *info)
+static void
+smbd_join_workgroup(smb_joininfo_t *info, smb_joinres_t *res)
 {
 	char nb_domain[SMB_PI_MAX_DOMAIN];
 
@@ -377,65 +233,25 @@ smbd_join_workgroup(smb_joininfo_t *info)
 
 	smbd_set_secmode(SMB_SECMODE_WORKGRP);
 	smb_config_setdomaininfo(info->domain_name, "", "", "", "");
+	(void) smb_config_set_idmap_domain("");
+	(void) smb_config_refresh_idmap();
 
 	if (strcasecmp(nb_domain, info->domain_name))
 		smb_browser_reconfig();
 
-	return (NT_STATUS_SUCCESS);
+	res->status = NT_STATUS_SUCCESS;
 }
 
-static uint32_t
-smbd_join_domain(smb_joininfo_t *info)
+static void
+smbd_join_domain(smb_joininfo_t *info, smb_joinres_t *res)
 {
-	uint32_t status;
-	unsigned char passwd_hash[SMBAUTH_HASH_SZ];
-	char dc[MAXHOSTNAMELEN];
-	smb_domainex_t dxi;
-	smb_domain_t *di;
 
-	/*
-	 * Ensure that any previous membership of this domain has
-	 * been cleared from the environment before we start. This
-	 * will ensure that we don't attempt a NETLOGON_SAMLOGON
-	 * when attempting to find the PDC.
-	 */
-
-	(void) smb_config_setbool(SMB_CI_DOMAIN_MEMB, B_FALSE);
-
-	if (smb_auth_ntlm_hash(info->domain_passwd, passwd_hash)
-	    != SMBAUTH_SUCCESS) {
-		syslog(LOG_ERR, "smbd: could not compute ntlm hash for '%s'",
-		    info->domain_username);
-		return (NT_STATUS_INTERNAL_ERROR);
-	}
-
-	smb_ipc_set(info->domain_username, passwd_hash);
-
-	(void) smbd_get_kpasswd_srv(dc, sizeof (dc));
 	/* info->domain_name could either be NetBIOS domain name or FQDN */
-	if (smb_locate_dc(info->domain_name, dc, &dxi)) {
-		status = mlsvc_join(&dxi, info->domain_username,
-		    info->domain_passwd);
-
-		if (status == NT_STATUS_SUCCESS) {
-			di = &dxi.d_primary;
-			smbd_set_secmode(SMB_SECMODE_DOMAIN);
-			smb_config_setdomaininfo(di->di_nbname, di->di_fqname,
-			    di->di_sid,
-			    di->di_u.di_dns.ddi_forest,
-			    di->di_u.di_dns.ddi_guid);
-			smb_ipc_commit();
-			return (status);
-		}
-
-		smb_ipc_rollback();
+	mlsvc_join(info, res);
+	if (res->status == 0) {
+		smbd_set_secmode(SMB_SECMODE_DOMAIN);
+	} else {
 		syslog(LOG_ERR, "smbd: failed joining %s (%s)",
-		    info->domain_name, xlate_nt_status(status));
-		return (status);
+		    info->domain_name, xlate_nt_status(res->status));
 	}
-
-	smb_ipc_rollback();
-	syslog(LOG_ERR, "smbd: failed locating domain controller for %s",
-	    info->domain_name);
-	return (NT_STATUS_DOMAIN_CONTROLLER_NOT_FOUND);
 }

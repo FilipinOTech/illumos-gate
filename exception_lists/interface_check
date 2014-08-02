@@ -99,6 +99,7 @@ NOVERDEF	^usr/sadm/admin/printmgr/lib/libpmgr\.so\.1$
 # Objects that are allowed to deviate from our standard version
 # names.
 NONSTD_VERNAME	^usr/MACH(lib)/libtecla\.so\.1$
+NONSTD_VERNAME	^lib/libsqlite\.so\.2\.8\.15$
 
 
 # These libc variants have an SONAME of libc\.so\.1$

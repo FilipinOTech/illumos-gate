@@ -154,6 +154,8 @@ zfeature_register(spa_feature_t fid, const char *guid, const char *name,
 	feature->fi_depends = deps;
 }
 
+spa_feature_t cos_deps[] = { SPA_FEATURE_VDEV_PROPS, SPA_FEATURE_NONE };
+
 void
 zpool_feature_init(void)
 {
@@ -221,4 +223,18 @@ zpool_feature_init(void)
 	    "com.delphix:embedded_data", "embedded_data",
 	    "Blocks which compress very well use even less space.",
 	    B_FALSE, B_TRUE, B_TRUE, NULL);
+
+	zfeature_register(SPA_FEATURE_META_DEVICES,
+	    "com.nexenta:meta_devices", "meta_devices",
+	    "Dedicated devices for metadata.", B_TRUE, B_FALSE, B_FALSE, NULL);
+	zfeature_register(SPA_FEATURE_VDEV_PROPS,
+	    "com.nexenta:vdev_properties", "vdev_properties",
+	    "Vdev-specific properties.", B_TRUE, B_FALSE, B_FALSE, NULL);
+	zfeature_register(SPA_FEATURE_COS_PROPS,
+	    "com.nexenta:class_of_storage", "class_of_storage",
+	    "Properties for groups of vdevs.", B_TRUE, B_FALSE, B_FALSE,
+	    cos_deps);
+	zfeature_register(SPA_FEATURE_SHA1CRC32,
+	    "com.nexenta:checksum_sha1crc32", "checksum_sha1crc32",
+	    "Support for sha1crc32 checksum.", B_FALSE, B_FALSE, B_FALSE, NULL);
 }

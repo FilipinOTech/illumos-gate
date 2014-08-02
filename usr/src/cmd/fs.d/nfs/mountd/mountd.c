@@ -97,10 +97,6 @@ static mutex_t logging_queue_lock;
 static cond_t logging_queue_cv;
 
 static share_t *find_lofsentry(char *, int *);
-static int getclientsnames_lazy(char *, struct netbuf **,
-	struct nd_hostservlist **);
-static int getclientsnames(SVCXPRT *, struct netbuf **,
-	struct nd_hostservlist **);
 static int getclientsflavors_old(share_t *, SVCXPRT *, struct netbuf **,
 	struct nd_hostservlist **, int *);
 static int getclientsflavors_new(share_t *, SVCXPRT *, struct netbuf **,
@@ -827,7 +823,7 @@ getclientsnames_common(struct netconfig *nconf, struct netbuf **nbuf,
  * relevant transport handle parts.
  * If the name is not available then return "(anon)".
  */
-static int
+int
 getclientsnames_lazy(char *netid, struct netbuf **nbuf,
     struct nd_hostservlist **serv)
 {

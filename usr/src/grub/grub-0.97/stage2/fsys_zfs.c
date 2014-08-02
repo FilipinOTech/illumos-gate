@@ -1048,6 +1048,9 @@ static const char *spa_feature_names[] = {
 	"com.delphix:hole_birth",
 	"com.delphix:extensible_dataset",
 	"com.delphix:embedded_data",
+	"com.nexenta:meta_devices",
+	"com.nexenta:vdev_attributes",
+	"com.nexenta:class_of_storages",
 	NULL
 };
 

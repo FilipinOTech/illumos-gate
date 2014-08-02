@@ -43,6 +43,9 @@ int dmu_send_estimate(struct dsl_dataset *ds, struct dsl_dataset *fromds,
     uint64_t *sizep);
 int dmu_send_obj(const char *pool, uint64_t tosnap, uint64_t fromsnap,
     boolean_t embedok, int outfd, vnode_t *vp, offset_t *off);
+int dmu_send_obj_ss(const char *pool, uint64_t tosnap, uint64_t fromsnap,
+    boolean_t embedok, int outfd, vnode_t *vp, offset_t *off,
+    boolean_t sendsize);
 
 typedef struct dmu_recv_cookie {
 	struct dsl_dataset *drc_ds;

@@ -1944,6 +1944,21 @@ iscsit_op_scsi_cmd(idm_conn_t *ic, idm_pdu_t *rx_pdu)
 	iscsit_process_pdu_in_queue(ict->ict_sess);
 }
 
+static int
+iscsit_validate_idm_pdu(idm_pdu_t *rx_pdu)
+{
+	iscsi_scsi_cmd_hdr_t	*iscsi_scsi =
+	    (iscsi_scsi_cmd_hdr_t *)rx_pdu->isp_hdr;
+
+	if ((iscsi_scsi->scb[0] == SCMD_READ) ||
+	    (iscsi_scsi->scb[0] == SCMD_READ_G1) ||
+	    (iscsi_scsi->scb[0] == SCMD_READ_G4)) {
+		if (iscsi_scsi->flags & ISCSI_FLAG_CMD_WRITE)
+			return (IDM_STATUS_FAIL);
+	}
+	return (IDM_STATUS_SUCCESS);
+}
+
 /*
  * ISCSI protocol
  */
@@ -1961,6 +1976,15 @@ iscsit_post_scsi_cmd(idm_conn_t *ic, idm_pdu_t *rx_pdu)
 	uint16_t		addl_cdb_len = 0;
 
 	ict = ic->ic_handle;
+	if (iscsit_validate_idm_pdu(rx_pdu) != IDM_STATUS_SUCCESS) {
+		/* Finish processing request */
+		iscsit_set_cmdsn(ict, rx_pdu);
+
+		iscsit_send_direct_scsi_resp(ict, rx_pdu,
+		    ISCSI_STATUS_CMD_COMPLETED, STATUS_CHECK);
+		idm_pdu_complete(rx_pdu, IDM_STATUS_PROTOCOL_ERROR);
+		return;
+	}
 
 	itask = iscsit_task_alloc(ict);
 	if (itask == NULL) {

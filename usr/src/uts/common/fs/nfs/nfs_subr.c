@@ -22,9 +22,8 @@
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
 /*
- * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/param.h>
@@ -130,7 +129,7 @@ static rhashq_t *rtable;
 static kmutex_t rpfreelist_lock;
 static rnode_t *rpfreelist = NULL;
 static long rnew = 0;
-long nrnode = 0;
+volatile long nrnode = 0;
 
 static int rtablesize;
 static int rtablemask;
@@ -148,14 +147,17 @@ kmutex_t nfs_minor_lock;
 int nfs_major;
 int nfs_minor;
 
-/* Do we allow preepoch (negative) time values otw? */
-bool_t nfs_allow_preepoch_time = FALSE;	/* default: do not allow preepoch */
+/*
+ * Do we allow preepoch (negative) time values otw?
+ * default: do not allow preepoch
+ */
+volatile bool_t nfs_allow_preepoch_time = FALSE;
 
 /*
  * Access cache
  */
 static acache_hash_t *acache;
-static long nacache;	/* used strictly to size the number of hash queues */
+volatile long nacache;	/* used strictly to size the number of hash queues */
 
 static int acachesize;
 static int acachemask;
@@ -227,7 +229,7 @@ static struct kmem_cache *chtab_cache;
  * with these broken servers, the nfs_disable_rddir_cache
  * parameter must be set in /etc/system
  */
-int nfs_disable_rddir_cache = 0;
+volatile int nfs_disable_rddir_cache = 0;
 
 int		clget(clinfo_t *, servinfo_t *, cred_t *, CLIENT **,
 		    struct chtab **);
@@ -863,7 +865,7 @@ rfs2call(mntinfo_t *mi, rpcproc_t which, xdrproc_t xdrargs, caddr_t argsp,
 
 #define	NFS3_JUKEBOX_DELAY	10 * hz
 
-static clock_t nfs3_jukebox_delay = 0;
+volatile clock_t nfs3_jukebox_delay = 0;
 
 #ifdef DEBUG
 static int rfs3call_hits = 0;

@@ -19,6 +19,8 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ *
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  *
@@ -146,6 +148,7 @@ extern "C" {
 #define	NSS_LINELEN_GROUP	((NSS_BUFSIZ) * 8)
 #define	NSS_LINELEN_HOSTS	((NSS_BUFSIZ) * 8)
 #define	NSS_LINELEN_IPNODES	((NSS_BUFSIZ) * 8)
+#define	NSS_LINELEN_NETGROUP	((NSS_BUFSIZ) * 32)
 #define	NSS_LINELEN_NETMASKS	NSS_BUFSIZ
 #define	NSS_LINELEN_NETWORKS	NSS_BUFSIZ
 #define	NSS_LINELEN_PASSWD	NSS_BUFSIZ
@@ -359,6 +362,12 @@ struct nss_innetgr_args {
 	struct nss_innetgr_1arg groups;
 /* out: */
 	enum nss_netgr_status	status;
+};
+
+/* For NSS_DBOP_NETGROUP_BYNAME */
+struct nss_netgrent {
+	char	*netgr_name;
+	char	*netgr_members;
 };
 
 /*
@@ -801,9 +810,11 @@ extern nss_status_t	nss_packed_getkey();
 
 /*
  * The "real" backend for netgroup (__multi_innetgr, setnetgrent)
+ * Note: _BYNAME is implemented only in "files" (for now).
  */
 #define	NSS_DBOP_NETGROUP_IN		(NSS_DBOP_next_iter)
 #define	NSS_DBOP_NETGROUP_SET		(NSS_DBOP_NETGROUP_IN  + 1)
+#define	NSS_DBOP_NETGROUP_BYNAME	(NSS_DBOP_NETGROUP_SET + 1)
 
 /*
  * The backend for getpublickey and getsecretkey (getkeys)

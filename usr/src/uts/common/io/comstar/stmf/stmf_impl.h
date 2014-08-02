@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ *
+ * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2013 by Delphix. All rights reserved.
  */
 #ifndef _STMF_IMPL_H
@@ -89,7 +91,7 @@ typedef struct stmf_i_lu {
 	uint32_t	ilu_ntasks;	 /* # of tasks in the ilu_task list */
 	uint32_t	ilu_ntasks_free;	/* # of tasks that are free */
 	uint32_t	ilu_ntasks_min_free; /* # minimal free tasks */
-	uint32_t	rsvd1;
+	uint32_t	ilu_additional_ref;
 	uint32_t	ilu_proxy_registered;
 	uint64_t	ilu_reg_msgid;
 	struct stmf_i_scsi_task	*ilu_tasks;

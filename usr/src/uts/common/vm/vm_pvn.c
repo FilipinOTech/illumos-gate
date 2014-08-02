@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1986, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -343,7 +344,7 @@ pvn_read_done(page_t *plist, int flags)
  * write queue.
  */
 int	write_free = 1;
-pgcnt_t	pages_before_pager = 200;	/* LMXXX */
+volatile pgcnt_t pages_before_pager = 200;	/* LMXXX */
 
 /*
  * Routine to be called when page-out's complete.

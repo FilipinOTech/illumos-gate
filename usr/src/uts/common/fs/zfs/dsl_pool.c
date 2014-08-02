@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
  */
@@ -29,10 +30,12 @@
 #include <sys/dsl_prop.h>
 #include <sys/dsl_dir.h>
 #include <sys/dsl_synctask.h>
+#include <sys/dsl_dataset.h>
 #include <sys/dsl_scan.h>
 #include <sys/dnode.h>
 #include <sys/dmu_tx.h>
 #include <sys/dmu_objset.h>
+#include <sys/dmu_traverse.h>
 #include <sys/arc.h>
 #include <sys/zap.h>
 #include <sys/zio.h>
@@ -45,6 +48,9 @@
 #include <sys/zfeature.h>
 #include <sys/zil_impl.h>
 #include <sys/dsl_userhold.h>
+
+#include <sys/wrcache.h>
+#include <sys/time.h>
 
 /*
  * ZFS Write Throttle
@@ -159,6 +165,9 @@ dsl_pool_open_impl(spa_t *spa, uint64_t txg)
 	dp->dp_spa = spa;
 	dp->dp_meta_rootbp = *bp;
 	rrw_init(&dp->dp_config_rwlock, B_TRUE);
+
+	dp->dp_sync_history[0] = dp->dp_sync_history[1] = 0;
+
 	txg_init(dp, txg);
 
 	txg_list_create(&dp->dp_dirty_datasets,

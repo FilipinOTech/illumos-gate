@@ -19,8 +19,11 @@
 # CDDL HEADER END
 #
 
+#
 # Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+#
 
 # include global definitions
 include Makefile.master
@@ -31,6 +34,7 @@ include Makefile.master
 #
 COMMON_SUBDIRS = \
 	cmd/acctadm \
+	cmd/aoeadm \
 	cmd/asa \
 	cmd/amt \
 	cmd/audio/audioctl \
@@ -109,6 +113,7 @@ COMMON_SUBDIRS = \
 	cmd/dfs.cmds \
 	cmd/diff3 \
 	cmd/dis \
+	cmd/disk-dmc \
 	cmd/dirname \
 	cmd/diskscan \
 	cmd/dispadmin \
@@ -196,6 +201,7 @@ COMMON_SUBDIRS = \
 	cmd/lvm \
 	cmd/machid \
 	cmd/makekey \
+	cmd/man \
 	cmd/mdb \
 	cmd/mesg \
 	cmd/mkdir \
@@ -346,6 +352,7 @@ COMMON_SUBDIRS = \
 	lib/libadutils \
 	lib/libadt_jni \
 	lib/libaio \
+	lib/libaoe \
 	lib/libavl \
 	lib/libbrand \
 	lib/libbsdmalloc \

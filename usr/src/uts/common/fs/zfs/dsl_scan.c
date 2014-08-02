@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  */
 
@@ -72,7 +73,9 @@ int dsl_scan_delay_completion = B_FALSE; /* set to delay scan completion */
 
 #define	DSL_SCAN_IS_SCRUB_RESILVER(scn) \
 	((scn)->scn_phys.scn_func == POOL_SCAN_SCRUB || \
-	(scn)->scn_phys.scn_func == POOL_SCAN_RESILVER)
+	(scn)->scn_phys.scn_func == POOL_SCAN_RESILVER || \
+	(scn)->scn_phys.scn_func == POOL_SCAN_MOS || \
+	(scn)->scn_phys.scn_func == POOL_SCAN_META)
 
 extern int zfs_txg_timeout;
 
@@ -81,6 +84,8 @@ static scan_cb_t *scan_funcs[POOL_SCAN_FUNCS] = {
 	NULL,
 	dsl_scan_scrub_cb,	/* POOL_SCAN_SCRUB */
 	dsl_scan_scrub_cb,	/* POOL_SCAN_RESILVER */
+	dsl_scan_scrub_cb,	/* POOL_SCAN_MOS */
+	dsl_scan_scrub_cb,	/* POOL_SCAN_META */
 };
 
 int
@@ -188,7 +193,8 @@ dsl_scan_setup_sync(void *arg, dmu_tx_t *tx)
 	scn->scn_phys.scn_state = DSS_SCANNING;
 	scn->scn_phys.scn_min_txg = 0;
 	scn->scn_phys.scn_max_txg = tx->tx_txg;
-	scn->scn_phys.scn_ddt_class_max = DDT_CLASSES - 1; /* the entire DDT */
+	/* the entire DDT */
+	scn->scn_phys.scn_ddt_class_max = spa->spa_ddt_class_max;
 	scn->scn_phys.scn_start_time = gethrestime_sec();
 	scn->scn_phys.scn_errors = 0;
 	scn->scn_phys.scn_to_examine = spa->spa_root_vdev->vdev_stat.vs_alloc;
@@ -197,7 +203,8 @@ dsl_scan_setup_sync(void *arg, dmu_tx_t *tx)
 	spa_scan_stat_init(spa);
 
 	if (DSL_SCAN_IS_SCRUB_RESILVER(scn)) {
-		scn->scn_phys.scn_ddt_class_max = zfs_scrub_ddt_class_max;
+		scn->scn_phys.scn_ddt_class_max =
+		    MIN(zfs_scrub_ddt_class_max, spa->spa_ddt_class_max);
 
 		/* rewrite all disk labels */
 		vdev_config_dirty(spa->spa_root_vdev);
@@ -216,7 +223,8 @@ dsl_scan_setup_sync(void *arg, dmu_tx_t *tx)
 		 * of the scrub should go faster using top-down pruning.
 		 */
 		if (scn->scn_phys.scn_min_txg > TXG_INITIAL)
-			scn->scn_phys.scn_ddt_class_max = DDT_CLASS_DITTO;
+			scn->scn_phys.scn_ddt_class_max =
+			    MIN(DDT_CLASS_DITTO, spa->spa_ddt_class_max);
 
 	}
 
@@ -1182,8 +1190,10 @@ dsl_scan_ddt(dsl_scan_t *scn, dmu_tx_t *tx)
 
 		/* There should be no pending changes to the dedup table */
 		ddt = scn->scn_dp->dp_spa->spa_ddt[ddb->ddb_checksum];
-		ASSERT(avl_first(&ddt->ddt_tree) == NULL);
-
+#ifdef ZFS_DEBUG
+		for (uint_t i = 0; i < DDT_HASHSZ; i++)
+			ASSERT(avl_first(&ddt->ddt_tree[i]) == NULL);
+#endif
 		dsl_scan_ddt_entry(scn, ddb->ddb_checksum, &dde, tx);
 		n++;
 
@@ -1667,6 +1677,7 @@ dsl_scan_scrub_done(zio_t *zio)
 	if (zio->io_error && (zio->io_error != ECKSUM ||
 	    !(zio->io_flags & ZIO_FLAG_SPECULATIVE))) {
 		spa->spa_dsl_pool->dp_scan->scn_phys.scn_errors++;
+		DTRACE_PROBE1(scn_error, zio_t *, zio);
 	}
 	mutex_exit(&spa->spa_scrub_lock);
 }
@@ -1693,7 +1704,9 @@ dsl_scan_scrub_cb(dsl_pool_t *dp,
 		return (0);
 
 	ASSERT(DSL_SCAN_IS_SCRUB_RESILVER(scn));
-	if (scn->scn_phys.scn_func == POOL_SCAN_SCRUB) {
+	if (scn->scn_phys.scn_func == POOL_SCAN_SCRUB ||
+	    scn->scn_phys.scn_func == POOL_SCAN_MOS ||
+	    scn->scn_phys.scn_func == POOL_SCAN_META) {
 		zio_flags |= ZIO_FLAG_SCRUB;
 		needs_io = B_TRUE;
 		scan_delay = zfs_scrub_delay;
@@ -1708,6 +1721,16 @@ dsl_scan_scrub_cb(dsl_pool_t *dp,
 	if (zb->zb_level == ZB_ZIL_LEVEL)
 		zio_flags |= ZIO_FLAG_SPECULATIVE;
 
+	if (scn->scn_phys.scn_func == POOL_SCAN_MOS)
+		needs_io = (zb->zb_objset == 0);
+
+	if (scn->scn_phys.scn_func == POOL_SCAN_META)
+		needs_io = zb->zb_objset == 0 || BP_GET_LEVEL(bp) != 0 ||
+		    DMU_OT_IS_METADATA(BP_GET_TYPE(bp));
+
+	DTRACE_PROBE3(needs_io, boolean_t, needs_io, const blkptr_t *, bp,
+	    spa_t *, spa);
+
 	for (int d = 0; d < BP_GET_NDVAS(bp); d++) {
 		vdev_t *vd = vdev_lookup_top(spa,
 		    DVA_GET_VDEV(&bp->blk_dva[d]));
@@ -1720,7 +1743,8 @@ dsl_scan_scrub_cb(dsl_pool_t *dp,
 		spa->spa_scan_pass_exam += DVA_GET_ASIZE(&bp->blk_dva[d]);
 
 		/* if it's a resilver, this may not be in the target range */
-		if (!needs_io) {
+		if (!needs_io && scn->scn_phys.scn_func != POOL_SCAN_MOS &&
+		    scn->scn_phys.scn_func != POOL_SCAN_META) {
 			if (DVA_GET_GANG(&bp->blk_dva[d])) {
 				/*
 				 * Gang members may be spread across multiple
@@ -1731,9 +1755,14 @@ dsl_scan_scrub_cb(dsl_pool_t *dp,
 				 * gang members reside on the same vdev.
 				 */
 				needs_io = B_TRUE;
+				DTRACE_PROBE2(gang_bp, const blkptr_t *, bp,
+				    spa_t *, spa);
 			} else {
 				needs_io = vdev_dtl_contains(vd, DTL_PARTIAL,
 				    phys_birth, 1);
+				if (needs_io)
+					DTRACE_PROBE2(dtl, const blkptr_t *,
+					    bp, spa_t *, spa);
 			}
 		}
 	}
@@ -1756,6 +1785,8 @@ dsl_scan_scrub_cb(dsl_pool_t *dp,
 		if (ddi_get_lbolt64() - spa->spa_last_io <= zfs_scan_idle)
 			delay(scan_delay);
 
+		DTRACE_PROBE3(do_io, uint64_t, scn->scn_phys.scn_func,
+		    boolean_t, needs_io, spa_t *, spa);
 		zio_nowait(zio_read(NULL, spa, bp, data, size,
 		    dsl_scan_scrub_done, NULL, ZIO_PRIORITY_SCRUB,
 		    zio_flags, zb));

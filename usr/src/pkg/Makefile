@@ -21,10 +21,12 @@
 
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2013 Nexenta Systems, Inc. All rights reserved.
 #
 
 include $(SRC)/Makefile.master
 include $(SRC)/Makefile.buildnum
+include $(NZA_MAKEDEFS)
 
 #
 # Make sure we're getting a consistent execution environment for the
@@ -216,7 +218,20 @@ CLOBBERFILES= $(PDIR) proto_list_$(PKGMACH) install-$(PKGMACH).out \
 # build environment and then reference (implicitly or explicitly) the all
 # or install targets.
 #
-MANIFESTS :sh= (cd manifests; print *.mf)
+$(NZA_OPEN_ONLY)MANIFESTS:sh= (		\
+	cd manifests;			\
+	rm -f driver-isal.mf;		\
+	rm -f network-aoe-target.mf;	\
+	print *.mf			\
+	)
+
+$(NZA_KMODS)MANIFESTS:sh= (						\
+	cd manifests;							\
+	cp ../../../nza-closed/pkg/manifests/driver-isal.mf .;		\
+	cp ../../../nza-closed/pkg/manifests/network-aoe-target.mf .;	\
+	print *.mf							\
+	)
+
 PKGS= $(MANIFESTS:%.mf=%)
 DEP_PKGS= $(PKGS:%=$(PDIR)/%.dep)
 PROC_PKGS= $(PKGS:%=$(PDIR)/%.mog)

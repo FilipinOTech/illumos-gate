@@ -878,14 +878,26 @@ ndmpd_config_get_server_info_v3(ndmp_connection_t *connection, void *body)
 	ndmp_auth_type auth_types[2];
 	char rev_number[10];
 	ndmpd_session_t *session = ndmp_get_client_data(connection);
+	char *vendor;
+	char *product;
 
 	(void) memset((void*)&reply, 0, sizeof (reply));
 	reply.error = NDMP_NO_ERR;
 
 	if (connection->conn_authorized ||
 	    session->ns_protocol_version != NDMPV4) {
-		reply.vendor_name = VENDOR_NAME;
-		reply.product_name = PRODUCT_NAME;
+		if ((vendor = ndmpd_get_prop(NDMP_VENDOR_NAME)) == NULL ||
+			*vendor == 0) {
+			reply.vendor_name = VENDOR_NAME;
+		} else {
+			reply.vendor_name = vendor;
+		}
+		if ((product = ndmpd_get_prop(NDMP_PRODUCT_NAME)) == NULL ||
+			*product == 0) {
+			reply.product_name = PRODUCT_NAME;
+		} else {
+			reply.product_name = product;
+		}
 		(void) snprintf(rev_number, sizeof (rev_number), "%d",
 		    ndmp_ver);
 		reply.revision_number = rev_number;

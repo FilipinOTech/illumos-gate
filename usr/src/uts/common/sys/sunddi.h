@@ -23,6 +23,7 @@
  * Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Garrett D'Amore <garrett@damore.org>.  All rights reserved.
  * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef	_SYS_SUNDDI_H
@@ -329,7 +330,7 @@ typedef enum {
     DDI_DEVSTATE_UP = 32
 } ddi_devstate_t;
 
-#ifdef	_KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 /*
  * Common property definitions
@@ -430,7 +431,7 @@ extern void strfree(char *str);
  * Functions and data references which really should be in <sys/ddi.h>
  */
 
-extern int maxphys;
+extern volatile int maxphys;
 extern void minphys(struct buf *);
 extern int physio(int (*)(struct buf *), struct buf *, dev_t,
 	int, void (*)(struct buf *), struct uio *);
@@ -503,6 +504,9 @@ extern size_t kiconv(kiconv_t, char **, size_t *, char **, size_t *, int *);
 extern int kiconv_close(kiconv_t);
 extern size_t kiconvstr(const char *, const char *, char *, size_t *, char *,
 	size_t *, int, int *);
+
+#endif /* _KERNEL || _FAKE_KERNEL */
+#ifdef	_KERNEL
 
 /*
  * ddi_map_regs

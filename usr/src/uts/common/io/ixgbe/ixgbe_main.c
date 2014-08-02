@@ -26,9 +26,9 @@
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2013 Saso Kiselkov. All rights reserved.
  * Copyright (c) 2013 OSN Online Service Nuernberg GmbH. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include "ixgbe_sw.h"
@@ -1291,8 +1291,25 @@ ixgbe_init(ixgbe_t *ixgbe)
 	 * Setup default flow control thresholds - enable/disable
 	 * & flow control type is controlled by ixgbe.conf
 	 */
-	hw->fc.high_water[0] = DEFAULT_FCRTH;
-	hw->fc.low_water[0] = DEFAULT_FCRTL;
+	{
+		uint32_t rxpb, frame, size, hitmp, lotmp;
+
+		frame = ixgbe->max_frame_size;
+
+		/* Calculate High and Low Water */
+		if (hw->mac.type == ixgbe_mac_X540) {
+			hitmp = IXGBE_DV_X540(frame, frame);
+			lotmp = IXGBE_LOW_DV_X540(frame);
+		} else {
+				hitmp = IXGBE_DV(frame, frame);
+				lotmp = IXGBE_LOW_DV(frame);
+		}
+		size = IXGBE_BT2KB(hitmp);
+		rxpb = IXGBE_READ_REG(hw, IXGBE_RXPBSIZE(0)) >> 10;
+		hw->fc.high_water[0] = rxpb - size;
+		hw->fc.low_water[0] = IXGBE_BT2KB(lotmp);
+	}
+
 	hw->fc.pause_time = DEFAULT_FCPAUSE;
 	hw->fc.send_xon = B_TRUE;
 
@@ -3358,13 +3375,14 @@ ixgbe_driver_link_check(ixgbe_t *ixgbe)
 	if (link_up) {
 		ixgbe->link_check_complete = B_TRUE;
 
-		/* Link is up, enable flow control settings */
-		(void) ixgbe_fc_enable(hw);
-
 		/*
 		 * The Link is up, check whether it was marked as down earlier
 		 */
 		if (ixgbe->link_state != LINK_STATE_UP) {
+
+			/* Link is up, enable flow control settings */
+			(void) ixgbe_fc_enable(hw);
+
 			switch (speed) {
 			case IXGBE_LINK_SPEED_10GB_FULL:
 				ixgbe->link_speed = SPEED_10GB;

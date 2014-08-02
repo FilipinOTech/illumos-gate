@@ -21,6 +21,8 @@ MANSECT= 	7d
 
 _MANFILES=	aac.7d		\
 		afe.7d		\
+		aoe.7d		\
+		aoeblk.7d	\
 		audio.7d	\
 		audio1575.7d	\
 		audioens.7d	\
@@ -116,6 +118,7 @@ _MANFILES=	aac.7d		\
 		ses.7d		\
 		sfe.7d		\
 		sgen.7d		\
+		skd.7d		\
 		srpt.7d		\
 		st.7d		\
 		sv.7d		\
@@ -234,6 +237,7 @@ i386_MANFILES=	ahci.7d		\
 		uath.7d		\
 		ural.7d		\
 		urtw.7d		\
+		vmxnet3s.7d	\
 		wpi.7d		\
 		zyd.7d
 

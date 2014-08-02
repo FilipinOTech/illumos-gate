@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2014, Joyent, Inc. All rights reserved.
  */
@@ -64,12 +64,16 @@ dump_bytes(dmu_sendarg_t *dsp, void *buf, int len)
 	dsl_dataset_t *ds = dsp->dsa_os->os_dsl_dataset;
 	ssize_t resid; /* have to get resid to get detailed errno */
 	ASSERT0(len % 8);
+	ASSERT(dsp->sendsize || buf);
 
-	fletcher_4_incremental_native(buf, len, &dsp->dsa_zc);
-	dsp->dsa_err = vn_rdwr(UIO_WRITE, dsp->dsa_vp,
-	    (caddr_t)buf, len,
-	    0, UIO_SYSSPACE, FAPPEND, RLIM64_INFINITY, CRED(), &resid);
-
+	dsp->dsa_err = 0;
+	if (!dsp->sendsize) {
+		fletcher_4_incremental_native(buf, len, &dsp->dsa_zc);
+		dsp->dsa_err = vn_rdwr(UIO_WRITE, dsp->dsa_vp,
+		    (caddr_t)buf, len,
+		    0, UIO_SYSSPACE, FAPPEND, RLIM64_INFINITY,
+		    CRED(), &resid);
+	}
 	mutex_enter(&ds->ds_sendstream_lock);
 	*dsp->dsa_off += len;
 	mutex_exit(&ds->ds_sendstream_lock);
@@ -488,44 +492,52 @@ backup_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 		    zb->zb_blkid * blksz, blksz, bp);
 	} else { /* it's a level-0 block of a regular object */
 		uint32_t aflags = ARC_WAIT;
-		arc_buf_t *abuf;
+		arc_buf_t *abuf = NULL;
+		void *buf = NULL;
 		int blksz = BP_GET_LSIZE(bp);
 
-		ASSERT3U(blksz, ==, dnp->dn_datablkszsec << SPA_MINBLOCKSHIFT);
-		ASSERT0(zb->zb_level);
-		if (arc_read(NULL, spa, bp, arc_getbuf_func, &abuf,
-		    ZIO_PRIORITY_ASYNC_READ, ZIO_FLAG_CANFAIL,
-		    &aflags, zb) != 0) {
-			if (zfs_send_corrupt_data) {
+		if (!dsp->sendsize) {
+			ASSERT3U(blksz, ==, dnp->dn_datablkszsec << SPA_MINBLOCKSHIFT);
+			ASSERT0(zb->zb_level);
+			if (arc_read(NULL, spa, bp, arc_getbuf_func, &abuf,
+			    ZIO_PRIORITY_ASYNC_READ, ZIO_FLAG_CANFAIL,
+			    &aflags, zb) != 0) {
+				if (zfs_send_corrupt_data) {
 				/* Send a block filled with 0x"zfs badd bloc" */
-				abuf = arc_buf_alloc(spa, blksz, &abuf,
-				    ARC_BUFC_DATA);
-				uint64_t *ptr;
-				for (ptr = abuf->b_data;
-				    (char *)ptr < (char *)abuf->b_data + blksz;
-				    ptr++)
-					*ptr = 0x2f5baddb10c;
-			} else {
-				return (SET_ERROR(EIO));
+					abuf = arc_buf_alloc(spa, blksz, &abuf,
+					    ARC_BUFC_DATA);
+					uint64_t *ptr;
+					for (ptr = abuf->b_data;
+					    (char *)ptr <
+					    (char *)abuf->b_data + blksz;
+					    ptr++)
+						*ptr = 0x2f5baddb10c;
+				} else {
+					return (SET_ERROR(EIO));
+				}
 			}
+			buf = abuf->b_data;
 		}
 
 		err = dump_write(dsp, type, zb->zb_object, zb->zb_blkid * blksz,
-		    blksz, bp, abuf->b_data);
-		(void) arc_buf_remove_ref(abuf, &abuf);
+		    blksz, bp, buf);
+		if (!dsp->sendsize) {
+			(void) arc_buf_remove_ref(abuf, &abuf);
+		}
 	}
 
 	ASSERT(err == 0 || err == EINTR);
 	return (err);
 }
 
+
 /*
  * Releases dp using the specified tag.
  */
 static int
-dmu_send_impl(void *tag, dsl_pool_t *dp, dsl_dataset_t *ds,
+dmu_send_impl_ss(void *tag, dsl_pool_t *dp, dsl_dataset_t *ds,
     zfs_bookmark_phys_t *fromzb, boolean_t is_clone, boolean_t embedok,
-    int outfd, vnode_t *vp, offset_t *off)
+    int outfd, vnode_t *vp, offset_t *off, boolean_t sendsize)
 {
 	objset_t *os;
 	dmu_replay_record_t *drr;
@@ -604,6 +616,7 @@ dmu_send_impl(void *tag, dsl_pool_t *dp, dsl_dataset_t *ds,
 	dsp->dsa_pending_op = PENDING_NONE;
 	dsp->dsa_incremental = (fromzb != NULL);
 	dsp->dsa_featureflags = featureflags;
+	dsp->sendsize = sendsize;
 
 	mutex_enter(&ds->ds_sendstream_lock);
 	list_insert_head(&ds->ds_sendstreams, dsp);
@@ -617,8 +630,15 @@ dmu_send_impl(void *tag, dsl_pool_t *dp, dsl_dataset_t *ds,
 		goto out;
 	}
 
-	err = traverse_dataset(ds, fromtxg, TRAVERSE_PRE | TRAVERSE_PREFETCH,
-	    backup_cb, dsp);
+	if (dsp->sendsize) {
+		err = traverse_dataset(ds, fromtxg,
+		    TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA,
+		    backup_cb, dsp);
+	} else {
+		err = traverse_dataset(ds,
+		    fromtxg, TRAVERSE_PRE | TRAVERSE_PREFETCH,
+		    backup_cb, dsp);
+	}
 
 	if (dsp->dsa_pending_op != PENDING_NONE)
 		if (dump_bytes(dsp, drr, sizeof (dmu_replay_record_t)) != 0)
@@ -652,10 +672,19 @@ out:
 
 	return (err);
 }
+static int
+dmu_send_impl(void *tag, dsl_pool_t *dp, dsl_dataset_t *ds,
+    zfs_bookmark_phys_t *fromzb, boolean_t is_clone, boolean_t embedok,
+    int outfd, vnode_t *vp, offset_t *off)
+{
+	return (dmu_send_impl_ss(tag, dp, ds, fromzb, is_clone, embedok, outfd,
+	    vp, off, B_FALSE));
+}
 
 int
-dmu_send_obj(const char *pool, uint64_t tosnap, uint64_t fromsnap,
-    boolean_t embedok, int outfd, vnode_t *vp, offset_t *off)
+dmu_send_obj_ss(const char *pool, uint64_t tosnap, uint64_t fromsnap,
+    boolean_t embedok, int outfd, vnode_t *vp, offset_t *off,
+    boolean_t sendsize)
 {
 	dsl_pool_t *dp;
 	dsl_dataset_t *ds;
@@ -689,11 +718,11 @@ dmu_send_obj(const char *pool, uint64_t tosnap, uint64_t fromsnap,
 		zb.zbm_guid = fromds->ds_phys->ds_guid;
 		is_clone = (fromds->ds_dir != ds->ds_dir);
 		dsl_dataset_rele(fromds, FTAG);
-		err = dmu_send_impl(FTAG, dp, ds, &zb, is_clone, embedok,
-		    outfd, vp, off);
+		err = dmu_send_impl_ss(FTAG, dp, ds, &zb, is_clone, embedok,
+		    outfd, vp, off, sendsize);
 	} else {
-		err = dmu_send_impl(FTAG, dp, ds, NULL, B_FALSE, embedok,
-		    outfd, vp, off);
+		err = dmu_send_impl_ss(FTAG, dp, ds, NULL, B_FALSE, embedok,
+		    outfd, vp, off, sendsize);
 	}
 	dsl_dataset_rele(ds, FTAG);
 	return (err);

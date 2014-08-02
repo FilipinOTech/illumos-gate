@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  */
 
@@ -214,6 +215,57 @@ dump_packed_nvlist(objset_t *os, uint64_t object, void *data, size_t size)
 	dump_nvlist(nv, 8);
 
 	nvlist_free(nv);
+}
+
+/* ARGSUSED */
+static void
+dump_vdev_props(objset_t *os, uint64_t object, void *data, size_t size_dummy)
+{
+	size_t size = *(uint64_t *)data;
+	char *buf;
+	char *pbuf;
+	char *bufend;
+	vdev_props_phys_hdr_t vpph;
+
+	if (size == 0)
+		return;
+
+	buf = umem_alloc(size, UMEM_NOFAIL);
+	bufend = buf + size;
+
+	VERIFY(0 == dmu_read(os, object, 0, size, buf, DMU_READ_PREFETCH));
+
+	for (pbuf = buf; pbuf < bufend; pbuf += vpph.vpph_size) {
+		nvlist_t *nv;
+		char *packed;
+		uint64_t nvsize;
+		vdev_t *vdev;
+
+		if ((pbuf + sizeof(vdev_props_phys_hdr_t)) >= bufend) {
+			(void) printf("invalid vdev prop header\n");
+			return;
+		}
+		(void) memcpy((void*)&vpph, pbuf, sizeof(vdev_props_phys_hdr_t));
+		packed = pbuf + sizeof(vdev_props_phys_hdr_t);
+		nvsize = vpph.vpph_nvsize;
+		if ((packed + nvsize) >= bufend) {
+			(void) printf("invalid vdev props\n");
+			return;
+		} 
+
+		vdev = spa_lookup_by_guid(os->os_spa, vpph.vpph_guid, 1);
+		if (vdev == NULL)
+			continue;
+
+		(void) printf("device %s:\n", vdev->vdev_path);
+
+		VERIFY(nvlist_unpack(packed, nvsize, &nv, 0) == 0);
+
+		dump_nvlist(nv, 8);
+		nvlist_free(nv);
+	}
+
+	umem_free(buf, size);
 }
 
 /* ARGSUSED */
@@ -855,7 +907,8 @@ dump_ddt(ddt_t *ddt, enum ddt_type type, enum ddt_class class)
 		return;
 	ASSERT(error == 0);
 
-	if ((count = ddt_object_count(ddt, type, class)) == 0)
+	(void) ddt_object_count(ddt, type, class, &count);
+	if (count == 0)
 		return;
 
 	dspace = doi.doi_physical_blocks_512 << 9;
@@ -1697,6 +1750,10 @@ static object_viewer_t *object_viewer[DMU_OT_NUMTYPES + 1] = {
 	dump_none,		/* deadlist hdr			*/
 	dump_zap,		/* dsl clones			*/
 	dump_none,		/* bpobj subobjs		*/
+	dump_none,		/* cos props			*/
+	dump_packed_nvlist,	/* cos props size		*/
+	dump_none,		/* vdev props			*/
+	dump_vdev_props,	/* vdev props size		*/
 	dump_unknown,		/* Unknown type, must be last	*/
 };
 
@@ -2237,19 +2294,21 @@ zdb_count_block(zdb_cb_t *zcb, zilog_t *zilog, const blkptr_t *bp,
 		ddt_entry_t *dde;
 
 		ddt = ddt_select(zcb->zcb_spa, bp);
-		ddt_enter(ddt);
 		dde = ddt_lookup(ddt, bp, B_FALSE);
 
 		if (dde == NULL) {
 			refcnt = 0;
 		} else {
 			ddt_phys_t *ddp = ddt_phys_select(dde, bp);
+
+			/* no other competitors for dde */
+			dde_exit(dde);
+
 			ddt_phys_decref(ddp);
 			refcnt = ddp->ddp_refcnt;
 			if (ddt_phys_total_refcnt(dde) == 0)
 				ddt_remove(ddt, dde);
 		}
-		ddt_exit(ddt);
 	}
 
 	VERIFY3U(zio_wait(zio_claim(NULL, zcb->zcb_spa,
@@ -2324,7 +2383,7 @@ zdb_blkptr_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	zdb_count_block(zcb, zilog, bp,
 	    (type & DMU_OT_NEWTYPE) ? ZDB_OT_OTHER : type);
 
-	is_metadata = (BP_GET_LEVEL(bp) != 0 || DMU_OT_IS_METADATA(type));
+	is_metadata = BP_IS_METADATA(bp);
 
 	if (!BP_IS_EMBEDDED(bp) &&
 	    (dump_opt['c'] > 1 || (dump_opt['c'] && is_metadata))) {
@@ -2417,9 +2476,9 @@ zdb_ddt_leak_init(spa_t *spa, zdb_cb_t *zcb)
 		}
 		if (!dump_opt['L']) {
 			ddt_t *ddt = spa->spa_ddt[ddb.ddb_checksum];
-			ddt_enter(ddt);
-			VERIFY(ddt_lookup(ddt, &blk, B_TRUE) != NULL);
-			ddt_exit(ddt);
+			ddt_entry_t *dde;
+			VERIFY((dde = ddt_lookup(ddt, &blk, B_TRUE)) != NULL);
+			dde_exit(dde);
 		}
 	}
 
@@ -2516,7 +2575,7 @@ dump_block_stats(spa_t *spa)
 {
 	zdb_cb_t zcb = { 0 };
 	zdb_blkstats_t *zb, *tzb;
-	uint64_t norm_alloc, norm_space, total_alloc, total_found;
+	uint64_t norm_alloc, spec_alloc, norm_space, total_alloc, total_found;
 	int flags = TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA | TRAVERSE_HARD;
 	boolean_t leaks = B_FALSE;
 
@@ -2590,8 +2649,10 @@ dump_block_stats(spa_t *spa)
 	tzb = &zcb.zcb_type[ZB_TOTAL][ZDB_OT_TOTAL];
 
 	norm_alloc = metaslab_class_get_alloc(spa_normal_class(spa));
+	spec_alloc = metaslab_class_get_alloc(spa_special_class(spa));
 	norm_space = metaslab_class_get_space(spa_normal_class(spa));
 
+	norm_alloc += spec_alloc;
 	total_alloc = norm_alloc + metaslab_class_get_alloc(spa_log_class(spa));
 	total_found = tzb->zb_asize - zcb.zcb_dedup_asize;
 
@@ -2635,6 +2696,10 @@ dump_block_stats(spa_t *spa)
 	    (u_longlong_t)zcb.zcb_dedup_asize,
 	    (u_longlong_t)zcb.zcb_dedup_blocks,
 	    (double)zcb.zcb_dedup_asize / tzb->zb_asize + 1.0);
+	if (spec_alloc != 0) {
+		(void) printf("\tspecial allocated: %10llu\n",
+		    (u_longlong_t)spec_alloc);
+	}
 	(void) printf("\tSPA allocated: %10llu     used: %5.2f%%\n",
 	    (u_longlong_t)norm_alloc, 100.0 * norm_alloc / norm_space);
 
@@ -2779,7 +2844,7 @@ zdb_ddt_add_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	}
 
 	if (BP_IS_HOLE(bp) || BP_GET_CHECKSUM(bp) == ZIO_CHECKSUM_OFF ||
-	    BP_GET_LEVEL(bp) > 0 || DMU_OT_IS_METADATA(BP_GET_TYPE(bp)))
+	    BP_IS_METADATA(bp))
 		return (0);
 
 	ddt_key_fill(&zdde_search.zdde_key, bp);

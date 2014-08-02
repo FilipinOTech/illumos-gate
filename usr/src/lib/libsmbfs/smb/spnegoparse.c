@@ -1,3 +1,4 @@
+// Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
 // Copyright (C) 2002 Microsoft Corporation
 // All rights reserved.
 //
@@ -75,7 +76,7 @@ extern MECH_OID g_stcMechOIDList [];
 ////////////////////////////////////////////////////////////////////////////
 
 int CalculateMinSpnegoInitTokenSize( long nMechTokenLength,
-                                 long nMechListMICLength, SPNEGO_MECH_OID mechOid,
+      long nMechListMICLength, SPNEGO_MECH_OID *mechOidLst, int mechOidCnt,
                                  int nReqFlagsAvailable, long* pnTokenSize,
                                  long* pnInternalTokenLength )
 {
@@ -130,7 +131,7 @@ int CalculateMinSpnegoInitTokenSize( long nMechTokenLength,
    }
 
    // Next is the MechList - This is REQUIRED
-   nTempLength += ASNDerCalcMechListLength( mechOid, NULL );
+   nTempLength += ASNDerCalcMechListLength( mechOidLst, mechOidCnt, NULL );
 
    // Check for rollover error
    if ( nTempLength < nTotalLength )
@@ -205,7 +206,8 @@ xEndTokenInitLength:
 //    CreateSpnegoInitToken
 //
 // Parameters:
-//    [in]  MechType                -  OID in MechList
+//    [in]  pMechTypeList           -  OID array
+//    [in]  MechTypeCnt             -  OID array length
 //    [in]  ucContextFlags          -  ContextFlags value
 //    [in]  pbMechToken             -  Mech Token Binary Data
 //    [in]  ulMechTokenLen          -  Length of Mech Token
@@ -229,7 +231,7 @@ xEndTokenInitLength:
 //
 ////////////////////////////////////////////////////////////////////////////
 
-int CreateSpnegoInitToken( SPNEGO_MECH_OID MechType,
+int CreateSpnegoInitToken( SPNEGO_MECH_OID *pMechTypeList, long MechTypeCnt,
           unsigned char ucContextFlags, unsigned char* pbMechToken,
           unsigned long ulMechTokenLen, unsigned char* pbMechListMIC,
           unsigned long ulMechListMICLen, unsigned char* pbTokenData,
@@ -261,7 +263,7 @@ int CreateSpnegoInitToken( SPNEGO_MECH_OID MechType,
 
       pbWriteTokenData -= nTempLength;
       nTempLength = ASNDerWriteElement( pbWriteTokenData, SPNEGO_NEGINIT_ELEMENT_MECHLISTMIC,
-                              OCTETSTRING, pbMechListMIC, ulMechListMICLen );
+                       SPNEGO_CONSTRUCTED_SEQUENCE, pbMechListMIC, ulMechListMICLen );
 
       // Adjust Values and sanity check
       nTotalBytesWritten += nTempLength;
@@ -325,12 +327,12 @@ int CreateSpnegoInitToken( SPNEGO_MECH_OID MechType,
    }  // IF ContextFlags
 
    // Next is the MechList - This is REQUIRED
-   nTempLength = ASNDerCalcMechListLength( MechType, &nInternalLength );
+   nTempLength = ASNDerCalcMechListLength( pMechTypeList, MechTypeCnt, &nInternalLength );
 
    // Decrease the pbWriteTokenData, now we know the length and
    // write it out.
    pbWriteTokenData -= nTempLength;
-   nTempLength = ASNDerWriteMechList( pbWriteTokenData, MechType );
+   nTempLength = ASNDerWriteMechList( pbWriteTokenData, pMechTypeList, MechTypeCnt );
 
    // Adjust Values and sanity check
    nTotalBytesWritten += nTempLength;
@@ -628,7 +630,7 @@ int CreateSpnegoTargToken( SPNEGO_MECH_OID MechType,
 
       pbWriteTokenData -= nTempLength;
       nTempLength = ASNDerWriteElement( pbWriteTokenData, SPNEGO_NEGTARG_ELEMENT_MECHLISTMIC,
-                              OCTETSTRING, pbMechListMIC, ulMechListMICLen );
+                       SPNEGO_CONSTRUCTED_SEQUENCE, pbMechListMIC, ulMechListMICLen );
 
       // Adjust Values and sanity check
       nTotalBytesWritten += nTempLength;
@@ -1281,8 +1283,6 @@ int InitSpnegoTokenElements( SPNEGO_TOKEN* pSpnegoToken, unsigned char* pbTokenD
    long  nElementLength = 0L;
    long  nActualTokenLength = 0L;
    unsigned char* pbElements = NULL;
-	unsigned char * ptok;
-	long  tlen, elen, len;
 
    // Point to the correct array
    switch( pSpnegoToken->ucTokenType )
@@ -1370,37 +1370,20 @@ int InitSpnegoTokenElements( SPNEGO_TOKEN* pSpnegoToken, unsigned char* pbTokenD
                   nReturn = InitSpnegoTokenElementFromBasicType( pbTokenData, nElementLength,
                                                                   OCTETSTRING, spnego_init_mechToken,
                                                                   &pSpnegoToken->aElementArray[nCtr] );
-              }
+               }
                break;
 
                case SPNEGO_NEGINIT_ELEMENT_MECHLISTMIC:
                {
                   //
-                  // This is an OCTETSTRING which contains a message integrity BLOB.
+                  // This is an SPNEGO_CONSTRUCTED_SEQUENCE containing a
+                  // GENERALSTR which contains a message integrity BLOB.
                   //
 
                   nReturn = InitSpnegoTokenElementFromBasicType( pbTokenData, nElementLength,
-                                                                  OCTETSTRING, spnego_init_mechListMIC,
-                                                                  &pSpnegoToken->aElementArray[nCtr] );
-		/*
-		 * don't believe everything you read in RFCs (and MS
-		 * sample code)...  win2k is sending not an octet string,
-		 * but a "general string", wrapped in a sequence.
-		 */
-		if (nReturn != SPNEGO_E_UNEXPECTED_TYPE)
-			break;
-         	ptok = pbTokenData;
-		elen = nElementLength;
-		if ((nReturn = ASNDerCheckToken(ptok, SPNEGO_CONSTRUCTED_SEQUENCE, elen, elen, &len, &tlen)) != SPNEGO_E_SUCCESS)
-			break;
-		elen -= tlen;
-		ptok += tlen;
-
-		if ((nReturn = ASNDerCheckToken(ptok, SEQ_ELM(0), elen, elen, &len, &tlen)) != SPNEGO_E_SUCCESS)
-			break;
-		elen -= tlen;
-		ptok += tlen;
-		nReturn = InitSpnegoTokenElementFromBasicType(ptok, elen, GENERALSTR, spnego_init_mechListMIC, &pSpnegoToken->aElementArray[nCtr]);
+                                                                 SPNEGO_CONSTRUCTED_SEQUENCE,
+                                                                 spnego_init_mechListMIC,
+                                                                 &pSpnegoToken->aElementArray[nCtr] );
                }
                break;
 
@@ -1408,6 +1391,7 @@ int InitSpnegoTokenElements( SPNEGO_TOKEN* pSpnegoToken, unsigned char* pbTokenD
          }
          else
          {
+            /* pSpnegoToken->ucTokenType == SPNEGO_TOKEN_TARG */
 
             switch( pbElements[nCtr] )
             {
@@ -1453,12 +1437,14 @@ int InitSpnegoTokenElements( SPNEGO_TOKEN* pSpnegoToken, unsigned char* pbTokenD
                case SPNEGO_NEGTARG_ELEMENT_MECHLISTMIC:
                {
                   //
-                  // This is an OCTETSTRING which specifies a message integrity BLOB.
+                  // This is an SPNEGO_CONSTRUCTED_SEQUENCE containing a
+                  // GENERALSTR which contains a message integrity BLOB.
                   //
 
                   nReturn = InitSpnegoTokenElementFromBasicType( pbTokenData, nElementLength,
-                                                                  OCTETSTRING, spnego_targ_mechListMIC,
-                                                                  &pSpnegoToken->aElementArray[nCtr] );
+                                                                 SPNEGO_CONSTRUCTED_SEQUENCE,
+                                                                 spnego_targ_mechListMIC,
+                                                                 &pSpnegoToken->aElementArray[nCtr] );
                }
                break;
 

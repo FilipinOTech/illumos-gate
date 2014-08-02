@@ -36,6 +36,7 @@ _MANFILES=	6to4relay.1m		\
 		addbadsec.1m		\
 		arcstat.1m		\
 		arp.1m			\
+		aoeadm.1m		\
 		atohexlabel.1m		\
 		audit.1m		\
 		audit_warn.1m		\
@@ -108,6 +109,7 @@ _MANFILES=	6to4relay.1m		\
 		dhcpconfig.1m		\
 		dhcpmgr.1m		\
 		dhtadm.1m		\
+		disk-dmc.1m		\
 		disks.1m		\
 		diskscan.1m		\
 		dispadmin.1m		\

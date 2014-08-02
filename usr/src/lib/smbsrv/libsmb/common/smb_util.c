@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <ctype.h>
@@ -50,7 +50,6 @@
 #define	SMB_LIB_ALT	"/usr/lib/smbsrv/libsmbex.so"
 
 #define	SMB_TIMEBUF_SZ		16
-#define	SMB_TRACEBUF_SZ		200
 
 #define	SMB_LOG_FILE_FMT	"/var/smb/%s_log.txt"
 
@@ -73,7 +72,6 @@ static smb_log_pri_t smb_log_pri[] = {
 	"debug",	LOG_DEBUG
 };
 
-static void smb_log_trace(int, const char *);
 static smb_log_t *smb_log_get(smb_log_hdl_t);
 static void smb_log_dump(smb_log_t *);
 
@@ -325,29 +323,6 @@ trim_whitespace(char *buf)
 	}
 
 	return (buf);
-}
-
-/*
- * randomize
- *
- * Randomize the contents of the specified buffer.
- */
-void
-randomize(char *data, unsigned len)
-{
-	unsigned dwlen = len / 4;
-	unsigned remlen = len % 4;
-	unsigned tmp;
-	unsigned i; /*LINTED E_BAD_PTR_CAST_ALIGN*/
-	unsigned *p = (unsigned *)data;
-
-	for (i = 0; i < dwlen; ++i)
-		*p++ = random();
-
-	if (remlen) {
-		tmp = random();
-		(void) memcpy(p, &tmp, remlen);
-	}
 }
 
 /*
@@ -1185,7 +1160,7 @@ smb_log_create(int max_cnt, char *name)
  *
  * The date format for each message is the same as a syslog entry.
  *
- * The log is also added to syslog via smb_log_trace().
+ * The log is also added to syslog.
  */
 void
 smb_log(smb_log_hdl_t hdl, int priority, const char *fmt, ...)
@@ -1195,18 +1170,20 @@ smb_log(smb_log_hdl_t hdl, int priority, const char *fmt, ...)
 	smb_log_item_t	*msg;
 	time_t		now;
 	struct		tm *tm;
+	char		buf[SMB_LOG_LINE_SZ];
 	char		timebuf[SMB_TIMEBUF_SZ];
-	char		buf[SMB_TRACEBUF_SZ];
 	char		netbiosname[NETBIOS_NAME_SZ];
 	char		*pri_name;
 	int		i;
 
+	priority &= LOG_PRIMASK;
 	va_start(ap, fmt);
-	(void) vsnprintf(buf, SMB_TRACEBUF_SZ, fmt, ap);
+	smb_vsyslog(priority, fmt, ap);
 	va_end(ap);
 
-	priority &= LOG_PRIMASK;
-	smb_log_trace(priority, buf);
+	va_start(ap, fmt);
+	(void) vsnprintf(buf, SMB_LOG_LINE_SZ, fmt, ap);
+	va_end(ap);
 
 	if ((log = smb_log_get(hdl)) == NULL)
 		return;
@@ -1268,12 +1245,6 @@ smb_log_dumpall()
 	}
 
 	(void) mutex_unlock(&smb_loglist.ll_mtx);
-}
-
-static void
-smb_log_trace(int priority, const char *s)
-{
-	syslog(priority, "%s", s);
 }
 
 static smb_log_t *

@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 
@@ -60,6 +61,10 @@
 static void	term_handler(int);
 static void	init_idmapd();
 static void	fini_idmapd();
+
+/* The DC Locator lives inside idmap (for now). */
+extern void	init_dc_locator(void);
+extern void	fini_dc_locator(void);
 
 idmapd_state_t	_idmapdstate;
 
@@ -170,6 +175,7 @@ static void
 term_handler(int sig)
 {
 	idmapdlog(LOG_INFO, "Terminating.");
+	fini_dc_locator();
 	fini_idmapd();
 	_exit(0);
 }
@@ -250,6 +256,13 @@ main(int argc, char **argv)
 	int c;
 	struct rlimit rl;
 
+	if (rwlock_init(&_idmapdstate.rwlk_cfg, USYNC_THREAD, NULL) != 0)
+		return (-1);
+	if (mutex_init(&_idmapdstate.addisc_lk, USYNC_THREAD, NULL) != 0)
+		return (-1);
+	if (cond_init(&_idmapdstate.addisc_cv, USYNC_THREAD, NULL) != 0)
+		return (-1);
+
 	_idmapdstate.daemon_mode = TRUE;
 	while ((c = getopt(argc, argv, "d")) != -1) {
 		switch (c) {
@@ -303,6 +316,7 @@ main(int argc, char **argv)
 	idmap_init_tsd_key();
 
 	init_idmapd();
+	init_dc_locator();
 
 	/* signal handlers that should run only after we're initialized */
 	(void) sigset(SIGTERM, term_handler);

@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1986, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -283,7 +284,7 @@ svntr_cache_constructor(void *buf, void *cdrarg, int kmflags)
  * that have been transformed into malicious agents using one of the
  * numerous "buffer overflow" attacks.  See 4007890.
  */
-int noexec_user_stack = 0;
+volatile int noexec_user_stack = 0;
 int noexec_user_stack_log = 1;
 
 int segvn_lpg_disable = 0;

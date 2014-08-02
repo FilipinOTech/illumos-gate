@@ -22,6 +22,9 @@
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ */
 
 /*
  *	Copyright (c) 1983,1984,1985,1986,1987,1988,1989 AT&T.
@@ -1663,7 +1666,7 @@ tryagain:
 	return (error);
 }
 
-static int nfs3_do_symlink_cache = 1;
+volatile int nfs3_do_symlink_cache = 1;
 
 /* ARGSUSED */
 static int
@@ -1992,7 +1995,7 @@ out:
 	return (error);
 }
 
-static int nfs3_lookup_neg_cache = 1;
+volatile int nfs3_lookup_neg_cache = 1;
 
 #ifdef DEBUG
 static int nfs3_lookup_dnlc_hits = 0;
@@ -3698,7 +3701,7 @@ static int nfs3_readdir_cache_misses = 0;
 static int nfs3_readdir_readahead = 0;
 #endif
 
-static int nfs3_shrinkreaddir = 0;
+volatile int nfs3_shrinkreaddir = 0;
 
 /*
  * Read directory entries.
@@ -4517,7 +4520,7 @@ nfs3_seek(vnode_t *vp, offset_t ooff, offset_t *noffp, caller_context_t *ct)
 /*
  * number of nfs3_bsize blocks to read ahead.
  */
-static int nfs3_nra = 4;
+volatile int nfs3_nra = 4;
 
 #ifdef DEBUG
 static int nfs3_lostpage = 0;	/* number of times we lost original page */
@@ -5710,7 +5713,7 @@ nfs3_delmap_callback(struct as *as, void *arg, uint_t event)
 	kmem_free(dmapp, sizeof (nfs_delmap_args_t));
 }
 
-static int nfs3_pathconf_disable_cache = 0;
+volatile int nfs3_pathconf_disable_cache = 0;
 
 #ifdef DEBUG
 static int nfs3_pathconf_cache_hits = 0;

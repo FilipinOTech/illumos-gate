@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2013, 2014 by Delphix. All rights reserved.
  */
 
@@ -178,10 +179,14 @@ zfs_dirent_lock(zfs_dirlock_t **dlpp, znode_t *dzp, char *name, znode_t **zpp,
 	 * Decide if exact matches should be requested when performing
 	 * a zap lookup on file systems supporting case-insensitive
 	 * access.
+	 * N.B. for mixed case access we DON'T want an exact match if
+	 * any form of Unicode character normalization is enabled, as
+	 * exact matches bypass normalization (see zap_match()).
 	 */
 	exact =
 	    ((zfsvfs->z_case == ZFS_CASE_INSENSITIVE) && (flag & ZCIEXACT)) ||
-	    ((zfsvfs->z_case == ZFS_CASE_MIXED) && !(flag & ZCILOOK));
+	    ((zfsvfs->z_case == ZFS_CASE_MIXED) && !(flag & ZCILOOK) &&
+	    !(zfsvfs->z_norm & ~U8_TEXTPREP_TOUPPER));
 
 	/*
 	 * Only look in or update the DNLC if we are looking for the

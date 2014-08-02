@@ -19,19 +19,25 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/types.h>
+#include <sys/conf.h>
 #include <sys/ddi.h>
 #include <sys/modctl.h>
 #include <sys/cred.h>
+#include <sys/disp.h>
 #include <sys/ioccom.h>
 #include <sys/policy.h>
 #include <sys/cmn_err.h>
 #include <smbsrv/smb_kproto.h>
 #include <smbsrv/smb_ioctl.h>
+
+#ifdef	_FAKE_KERNEL
+#error	"See libfksmbsrv"
+#endif	/* _FAKE_KERNEL */
 
 static int smb_drv_open(dev_t *, int, int, cred_t *);
 static int smb_drv_close(dev_t, int, int, cred_t *);
@@ -55,8 +61,6 @@ static int smb_drv_getinfo(dev_info_t *, ddi_info_cmd_t, void *, void **);
  * with Windows NT4.0. Previous experiments with NT4.0 resulted in directory
  * listing problems so this buffer size is configurable based on the end-user
  * environment. When in doubt use 37KB.
- *
- * smb_raw_mode: read_raw and write_raw supported (1) or NOT supported (0).
  */
 int	smb_maxbufsize = SMB_NT_MAXBUF;
 int	smb_oplock_levelII = 1;
@@ -65,7 +69,6 @@ int	smb_oplock_min_timeout = OPLOCK_MIN_TIMEOUT;
 int	smb_flush_required = 1;
 int	smb_dirsymlink_enable = 1;
 int	smb_sign_debug = 0;
-int	smb_raw_mode = 0;
 int	smb_shortnames = 1;
 uint_t	smb_audit_flags =
 #ifdef	DEBUG
@@ -75,10 +78,8 @@ uint_t	smb_audit_flags =
 #endif
 
 /*
- * Maximum number of simultaneous authentication, share mapping, pipe open
- * requests to be processed.
+ * Maximum number of simultaneous share mapping, pipe open requests allowed.
  */
-int	smb_ssetup_threshold = 256;
 int	smb_tcon_threshold = 1024;
 int	smb_opipe_threshold = 1024;
 
@@ -90,7 +91,22 @@ int	smb_ssetup_timeout = (30 * 1000);
 int	smb_tcon_timeout = (30 * 1000);
 int	smb_opipe_timeout = (30 * 1000);
 
-int	smb_threshold_debug = 0;
+/*
+ * Thread priorities used in smbsrv.  Our threads spend most of their time
+ * blocked on various conditions.  However, if the system gets heavy load,
+ * the scheduler has to choose an order to run these.  We want the order:
+ * (a) timers, (b) notifications, (c) workers, (d) receivers (and etc.)
+ * where notifications are oplock and change notify work.  Aside from this
+ * relative ordering, smbsrv threads should run with a priority close to
+ * that of normal user-space threads (thus minclsyspri below), just like
+ * NFS and other "file service" kinds of processing.
+ */
+int smbsrv_base_pri	= MINCLSYSPRI;
+int smbsrv_listen_pri	= MINCLSYSPRI;
+int smbsrv_receive_pri	= MINCLSYSPRI;
+int smbsrv_worker_pri	= MINCLSYSPRI + 1;
+int smbsrv_notify_pri	= MINCLSYSPRI + 2;
+int smbsrv_timer_pri	= MINCLSYSPRI + 5;
 
 
 /*
@@ -160,17 +176,12 @@ _init(void)
 {
 	int rc;
 
-	if ((rc = smb_kshare_init()) != 0)
-		return (rc);
-
-	if ((rc = smb_server_svc_init()) != 0) {
-		smb_kshare_fini();
+	if ((rc = smb_server_g_init()) != 0) {
 		return (rc);
 	}
 
 	if ((rc = mod_install(&modlinkage)) != 0) {
-		smb_kshare_fini();
-		(void) smb_server_svc_fini();
+		smb_server_g_fini();
 	}
 
 	return (rc);
@@ -187,9 +198,11 @@ _fini(void)
 {
 	int	rc;
 
+	if (smb_server_get_count() != 0)
+		return (EBUSY);
+
 	if ((rc = mod_remove(&modlinkage)) == 0) {
-		rc = smb_server_svc_fini();
-		smb_kshare_fini();
+		smb_server_g_fini();
 	}
 
 	return (rc);

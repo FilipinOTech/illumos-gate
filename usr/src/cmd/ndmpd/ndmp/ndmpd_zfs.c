@@ -38,6 +38,9 @@
  */
 /* Copyright (c) 2007, The Storage Networking Industry Association. */
 /* Copyright (c) 1996, 1997 PDC, Network Appliance. All Rights Reserved */
+/*
+ * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
+ */
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -916,7 +919,7 @@ ndmpd_zfs_restore_recv_write(ndmpd_zfs_args_t *ndmpd_zfs_args)
 		flags.force = B_TRUE;
 
 	err = zfs_receive(ndmpd_zfs_args->nz_zlibh, ndmpd_zfs_args->nz_dataset,
-	    &flags, ndmpd_zfs_args->nz_pipe_fd[PIPE_ZFS], NULL);
+	    &flags, ndmpd_zfs_args->nz_pipe_fd[PIPE_ZFS], NULL, NULL, NULL);
 
 	if (err && !session->ns_data.dd_abort)
 		NDMPD_ZFS_LOG_ZERR(ndmpd_zfs_args, "zfs_receive: %d", err);

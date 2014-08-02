@@ -2541,7 +2541,7 @@ userquota_propname_decode(const char *propname, boolean_t zoned,
 	boolean_t isuser;
 
 	domain[0] = '\0';
-
+	*ridp = 0;
 	/* Figure out the property type ({user|group}{quota|space}) */
 	for (type = 0; type < ZFS_NUM_USERQUOTA_PROPS; type++) {
 		if (strncmp(propname, zfs_userquota_prop_prefixes[type],
@@ -2562,35 +2562,60 @@ userquota_propname_decode(const char *propname, boolean_t zoned,
 		 * It's a SID name (eg "user@domain") that needs to be
 		 * turned into S-1-domainID-RID.
 		 */
-		directory_error_t e;
+		int flag = 0;
+		idmap_stat stat, map_stat;
+		uid_t pid;
+		idmap_rid_t rid;
+		idmap_get_handle_t *gh = NULL;
+
+		stat = idmap_get_create(&gh);
+		if (stat != IDMAP_SUCCESS) {
+			idmap_get_destroy(gh);
+			return (ENOMEM);
+		}
 		if (zoned && getzoneid() == GLOBAL_ZONEID)
 			return (ENOENT);
 		if (isuser) {
-			e = directory_sid_from_user_name(NULL,
-			    cp, &numericsid);
+			stat = idmap_getuidbywinname(cp, NULL, flag, &pid);
+			if (stat < 0)
+				return (ENOENT);
+			stat = idmap_get_sidbyuid(gh, pid, flag, &numericsid,
+			    &rid, &map_stat);
 		} else {
-			e = directory_sid_from_group_name(NULL,
-			    cp, &numericsid);
+			stat = idmap_getgidbywinname(cp, NULL, flag, &pid);
+			if (stat < 0)
+				return (ENOENT);
+			stat = idmap_get_sidbygid(gh, pid, flag, &numericsid,
+			    &rid, &map_stat);
 		}
-		if (e != NULL) {
-			directory_error_free(e);
+		if (stat < 0) {
+			idmap_get_destroy(gh);
+			return (ENOENT);
+		}
+		stat = idmap_get_mappings(gh);
+		idmap_get_destroy(gh);
+
+		if (stat < 0) {
 			return (ENOENT);
 		}
 		if (numericsid == NULL)
 			return (ENOENT);
 		cp = numericsid;
+		*ridp = rid;
 		/* will be further decoded below */
 	}
 
 	if (strncmp(cp, "S-1-", 4) == 0) {
 		/* It's a numeric SID (eg "S-1-234-567-89") */
 		(void) strlcpy(domain, cp, domainlen);
-		cp = strrchr(domain, '-');
-		*cp = '\0';
-		cp++;
-
 		errno = 0;
-		*ridp = strtoull(cp, &end, 10);
+		if (*ridp == 0) {
+			cp = strrchr(domain, '-');
+			*cp = '\0';
+			cp++;
+			*ridp = strtoull(cp, &end, 10);
+		} else
+			end = "";
 		if (numericsid) {
 			free(numericsid);
 			numericsid = NULL;
@@ -2820,7 +2845,7 @@ parent_name(const char *path, char *buf, size_t buflen)
  * 'zoned' property, which is used to validate property settings when creating
  * new datasets.
  */
-static int
+int
 check_parents(libzfs_handle_t *hdl, const char *path, uint64_t *zoned,
     boolean_t accept_ancestor, int *prefixlen)
 {
@@ -3116,6 +3141,8 @@ zfs_create(libzfs_handle_t *hdl, const char *path, zfs_type_t type,
 	/* create the dataset */
 	ret = lzc_create(path, ost, props);
 	nvlist_free(props);
+	if (ret == 0)
+		libzfs_log_event(hdl, path);
 
 	/* check for failure */
 	if (ret != 0) {
@@ -3263,9 +3290,15 @@ int
 zfs_destroy_snaps_nvl(libzfs_handle_t *hdl, nvlist_t *snaps, boolean_t defer)
 {
 	int ret;
+	nvpair_t *elem;
 	nvlist_t *errlist;
 
 	ret = lzc_destroy_snaps(snaps, defer, &errlist);
+	if (ret == 0) {
+		for (elem = nvlist_next_nvpair(snaps, NULL); elem != NULL;
+		    elem = nvlist_next_nvpair(snaps, elem))
+			libzfs_log_event(hdl, nvpair_name(elem));
+	}
 
 	if (ret == 0)
 		return (0);
@@ -3342,6 +3375,8 @@ zfs_clone(zfs_handle_t *zhp, const char *target, nvlist_t *props)
 
 	ret = lzc_clone(target, zhp->zfs_name, props);
 	nvlist_free(props);
+	if (ret == 0)
+		libzfs_log_event(hdl, target);
 
 	if (ret != 0) {
 		switch (errno) {
@@ -3487,6 +3522,11 @@ zfs_snapshot_nvl(libzfs_handle_t *hdl, nvlist_t *snaps, nvlist_t *props)
 	}
 
 	ret = lzc_snapshot(snaps, props, &errors);
+	if (ret == 0) {
+		for (elem = nvlist_next_nvpair(snaps, NULL); elem != NULL;
+		    elem = nvlist_next_nvpair(snaps, elem))
+			libzfs_log_event(hdl, nvpair_name(elem));
+	}
 
 	if (ret != 0) {
 		boolean_t printed = B_FALSE;

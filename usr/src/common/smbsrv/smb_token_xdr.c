@@ -21,6 +21,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -189,6 +191,8 @@ smb_logon_xdr(XDR *xdrs, smb_logon_t *objp)
 	if (!smb_buf32_xdr(xdrs, &objp->lg_nt_password))
 		return (FALSE);
 	if (!smb_buf32_xdr(xdrs, &objp->lg_lm_password))
+		return (FALSE);
+	if (!xdr_uint32_t(xdrs, &objp->lg_ntlm_flags))
 		return (FALSE);
 	if (!xdr_int(xdrs, &objp->lg_native_os))
 		return (FALSE);

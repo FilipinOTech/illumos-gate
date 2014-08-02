@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -61,6 +61,8 @@ static void netr_setup_identity(ndr_heap_t *, smb_logon_t *,
 static boolean_t netr_isadmin(struct netr_validation_info3 *);
 static uint32_t netr_setup_domain_groups(struct netr_validation_info3 *,
     smb_ids_t *);
+static uint32_t netr_setup_token_info3(struct netr_validation_info3 *,
+    smb_token_t *);
 static uint32_t netr_setup_token_wingrps(struct netr_validation_info3 *,
     smb_token_t *);
 
@@ -73,6 +75,83 @@ static mutex_t netlogon_mutex;
 static cond_t netlogon_cv;
 static boolean_t netlogon_busy = B_FALSE;
 static boolean_t netlogon_abort = B_FALSE;
+
+/*
+ * Helper for Kerberos authentication
+ */
+uint32_t
+smb_decode_krb5_pac(smb_token_t *token, char *data, uint_t len)
+{
+	struct krb5_validation_info info;
+	ndr_buf_t *nbuf;
+	uint32_t status = NT_STATUS_NO_MEMORY;
+	int rc;
+
+	bzero(&info, sizeof (info));
+
+	/* Need to keep this until we're done with &info */
+	nbuf = ndr_buf_init(&TYPEINFO(netr_interface));
+	if (nbuf == NULL)
+		goto out;
+
+	rc = ndr_buf_decode(nbuf, NDR_PTYPE_PAC,
+	    NETR_OPNUM_decode_krb5_pac, data, len, &info);
+	if (rc != NDR_DRC_OK) {
+		status = RPC_NT_PROTOCOL_ERROR;
+		goto out;
+	}
+
+	status = netr_setup_token_info3(&info.info3, token);
+
+	/* Deal with the "resource groups"? */
+
+
+out:
+	if (nbuf != NULL)
+		ndr_buf_fini(nbuf);
+
+	return (status);
+}
+
+/*
+ * Code factored out of netr_setup_token()
+ */
+static uint32_t
+netr_setup_token_info3(struct netr_validation_info3 *info3,
+    smb_token_t *token)
+{
+	smb_sid_t *domsid;
+
+	domsid = (smb_sid_t *)info3->LogonDomainId;
+
+	token->tkn_user.i_sid = smb_sid_splice(domsid,
+	    info3->UserId);
+	if (token->tkn_user.i_sid == NULL)
+		goto errout;
+
+	token->tkn_primary_grp.i_sid = smb_sid_splice(domsid,
+	    info3->PrimaryGroupId);
+	if (token->tkn_primary_grp.i_sid == NULL)
+		goto errout;
+
+	if (info3->EffectiveName.str) {
+		token->tkn_account_name =
+		    strdup((char *)info3->EffectiveName.str);
+		if (token->tkn_account_name == NULL)
+			goto errout;
+	}
+
+	if (info3->LogonDomainName.str) {
+		token->tkn_domain_name =
+		    strdup((char *)info3->LogonDomainName.str);
+		if (token->tkn_domain_name == NULL)
+			goto errout;
+	}
+
+	return (netr_setup_token_wingrps(info3, token));
+errout:
+	return (NT_STATUS_INSUFF_SERVER_RESOURCES);
+}
 
 /*
  * Abort impending domain logon requests.
@@ -348,6 +427,11 @@ netr_server_samlogon(mlsvc_handle_t *netr_handle, netr_info_t *netr_info,
 		break;
 
 	case NETR_NETWORK_LOGON:
+		if (user_info->lg_challenge_key.len < 8 ||
+		    user_info->lg_challenge_key.val == NULL) {
+			ndr_rpc_release(netr_handle);
+			return (NT_STATUS_INVALID_PARAMETER);
+		}
 		netr_setup_identity(heap, user_info, &info2.identity);
 		netr_network_samlogon(heap, netr_info, user_info, &info2);
 		arg.logon_info.ru.info2 = &info2;
@@ -433,7 +517,13 @@ netr_network_samlogon(ndr_heap_t *heap, netr_info_t *netr_info,
 {
 	uint32_t len;
 
-	bcopy(user_info->lg_challenge_key.val, info2->lm_challenge.data, 8);
+	if (user_info->lg_challenge_key.len >= 8 &&
+	    user_info->lg_challenge_key.val != 0) {
+		bcopy(user_info->lg_challenge_key.val,
+		    info2->lm_challenge.data, 8);
+	} else {
+		bzero(info2->lm_challenge.data, 8);
+	}
 
 	if ((len = user_info->lg_nt_password.len) != 0) {
 		ndr_heap_mkvcb(heap, user_info->lg_nt_password.val, len,

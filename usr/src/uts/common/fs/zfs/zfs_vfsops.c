@@ -43,6 +43,7 @@
 #include <sys/zil.h>
 #include <sys/fs/zfs.h>
 #include <sys/dmu.h>
+#include <sys/dsl_dir.h>
 #include <sys/dsl_prop.h>
 #include <sys/dsl_dataset.h>
 #include <sys/dsl_deleg.h>
@@ -1158,6 +1159,7 @@ zfs_domount(vfs_t *vfsp, char *osname)
 	uint64_t recordsize, fsid_guid;
 	int error = 0;
 	zfsvfs_t *zfsvfs;
+	char	worminfo[13] = {0};
 
 	ASSERT(vfsp);
 	ASSERT(osname);
@@ -1180,6 +1182,14 @@ zfs_domount(vfs_t *vfsp, char *osname)
 	if (error = dsl_prop_get_integer(osname, "recordsize", &recordsize,
 	    NULL))
 		goto out;
+
+	if (dsl_prop_get(osname, "nms:worm", 1, 12, &worminfo, NULL) == 0 &&
+	    worminfo[0] && strcmp(worminfo, "0") != 0 &&
+	    strcmp(worminfo, "off") != 0 && strcmp(worminfo, "-") != 0) {
+		zfsvfs->z_isworm = B_TRUE;
+	} else {
+		zfsvfs->z_isworm = B_FALSE;
+	}
 
 	vfsp->vfs_dev = mount_dev;
 	vfsp->vfs_fstype = zfsfstype;
@@ -1864,7 +1874,7 @@ zfsvfs_teardown(zfsvfs_t *zfsvfs, boolean_t unmounting)
 	if (dsl_dataset_is_dirty(dmu_objset_ds(zfsvfs->z_os)) &&
 	    !(zfsvfs->z_vfs->vfs_flag & VFS_RDONLY))
 		txg_wait_synced(dmu_objset_pool(zfsvfs->z_os), 0);
-	dmu_objset_evict_dbufs(zfsvfs->z_os);
+	(void) dmu_objset_evict_dbufs(zfsvfs->z_os);
 
 	return (0);
 }
@@ -2053,8 +2063,20 @@ zfs_suspend_fs(zfsvfs_t *zfsvfs)
 {
 	int error;
 
-	if ((error = zfsvfs_teardown(zfsvfs, B_FALSE)) != 0)
+	mutex_enter(&zfsvfs->z_lock);
+	if (zfsvfs->z_busy) {
+		mutex_exit(&zfsvfs->z_lock);
+		return (SET_ERROR(EBUSY));
+	}
+	zfsvfs->z_busy = B_TRUE;
+	mutex_exit(&zfsvfs->z_lock);
+
+	if ((error = zfsvfs_teardown(zfsvfs, B_FALSE)) != 0) {
+		mutex_enter(&zfsvfs->z_lock);
+		zfsvfs->z_busy = B_FALSE;
+		mutex_exit(&zfsvfs->z_lock);
 		return (error);
+	}
 
 	return (0);
 }
@@ -2139,6 +2161,10 @@ bail:
 		if (vn_vfswlock(zfsvfs->z_vfs->vfs_vnodecovered) == 0)
 			(void) dounmount(zfsvfs->z_vfs, MS_FORCE, CRED());
 	}
+	mutex_enter(&zfsvfs->z_lock);
+	zfsvfs->z_busy = B_FALSE;
+	mutex_exit(&zfsvfs->z_lock);
+
 	return (err);
 }
 

@@ -569,6 +569,8 @@ unalias.1	:= LINKSRC = alias.1
 
 batch.1		:= LINKSRC = at.1
 
+whatis.1	:= LINKSRC = apropos.1
+
 dirname.1	:= LINKSRC = basename.1
 
 continue.1	:= LINKSRC = break.1

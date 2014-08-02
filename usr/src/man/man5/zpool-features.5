@@ -14,7 +14,7 @@
 .\" CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your
 .\" own identifying information:
 .\" Portions Copyright [yyyy] [name of copyright owner]
-.TH ZPOOL-FEATURES 5 "Aug 27, 2013"
+.TH ZPOOL-FEATURES 5 "Dec 16, 2013"
 .SH NAME
 zpool\-features \- ZFS pool feature descriptions
 .SH DESCRIPTION
@@ -427,6 +427,46 @@ and no additional i/o is needed to read and write the data block.
 
 This feature becomes \fBactive\fR as soon as it is enabled and will
 never return to being \fBenabled\fR.
+
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBvdev_properties\fR\fR
+.ad
+.RS 4n
+.TS
+l l .
+GUID	com.nexenta:vdev_properties
+READ\-ONLY COMPATIBLE	yes
+DEPENDENCIES	none
+.TE
+
+This feature indicates that the pool includes on-disk format changes that
+support persistent vdev-specific properties. This feature will be
+\fBactive\fR when the first vdev-specific property is set.
+
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBcos_properties\fR\fR
+.ad
+.RS 4n
+.TS
+l l .
+GUID	com.nexenta:cos_properties
+READ\-ONLY COMPATIBLE	yes
+DEPENDENCIES	com.nexenta:vdev_properties
+.TE
+
+This feature indicates that the pool includes on-disk format changes that
+support persistent Class of Storage (CoS) properties. Such properties can
+be associated with a collection of device that belong to a common class
+from storage management standpoint. This feature will be
+\fBactive\fR when the first CoS property is set.
 
 .RE
 

@@ -22,6 +22,9 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ */
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -767,11 +770,6 @@ readagain:
 		}
 
 reencode_attrs:
-		/* encode the BOOLEAN for the existence of the next entry */
-		IXDR_PUT_U_INT32(ptr, true);
-		/* encode the COOKIE for the entry */
-		IXDR_PUT_U_HYPER(ptr, dp->d_off);
-
 		name = nfscmd_convname(ca, cs->exi, dp->d_name,
 		    NFSCMD_CONV_OUTBOUND, MAXPATHLEN + 1);
 
@@ -787,20 +785,10 @@ reencode_attrs:
 		/* room for LENGTH + string ? */
 		if ((ptr + (1 + rndup)) > ptr_redzone) {
 			no_space = TRUE;
+			if (name != dp->d_name)
+				kmem_free(name, MAXPATHLEN + 1);
 			continue;
 		}
-
-		/* encode the LENGTH of the name */
-		IXDR_PUT_U_INT32(ptr, namelen);
-		/* encode the RNDUP FILL first */
-		ptr[rndup - 1] = 0;
-		/* encode the NAME of the entry */
-		bcopy(name, (char *)ptr, namelen);
-		/* now bump the ptr after... */
-		ptr += rndup;
-
-		if (name != dp->d_name)
-			kmem_free(name, MAXPATHLEN + 1);
 
 		/*
 		 * Keep checking on the dircount to see if we have
@@ -814,8 +802,27 @@ reencode_attrs:
 		dircount -= DIRENT64_RECLEN(namelen);
 		if (nents != 0 && dircount < 0) {
 			no_space = TRUE;
+			if (name != dp->d_name)
+				kmem_free(name, MAXPATHLEN + 1);
 			continue;
 		}
+
+		/* encode the BOOLEAN for the existence of the next entry */
+		IXDR_PUT_U_INT32(ptr, true);
+		/* encode the COOKIE for the entry */
+		IXDR_PUT_U_HYPER(ptr, dp->d_off);
+
+		/* encode the LENGTH of the name */
+		IXDR_PUT_U_INT32(ptr, namelen);
+		/* encode the RNDUP FILL first */
+		ptr[rndup - 1] = 0;
+		/* encode the NAME of the entry */
+		bcopy(name, (char *)ptr, namelen);
+		/* now bump the ptr after... */
+		ptr += rndup;
+
+		if (name != dp->d_name)
+			kmem_free(name, MAXPATHLEN + 1);
 
 		/*
 		 * Attributes requested?

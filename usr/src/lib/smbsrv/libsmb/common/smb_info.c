@@ -20,11 +20,14 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
-#include <assert.h>
 #include <sys/types.h>
+#include <sys/sockio.h>
+#include <sys/socket.h>
+#include <sys/utsname.h>
+
 #include <stdarg.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -39,11 +42,11 @@
 #include <netinet/in.h>
 #include <arpa/nameser.h>
 #include <resolv.h>
-#include <sys/sockio.h>
-#include <sys/socket.h>
+
 #include <smbsrv/smbinfo.h>
 #include <smbsrv/netbios.h>
 #include <smbsrv/libsmb.h>
+#include <assert.h>
 
 static mutex_t seqnum_mtx;
 
@@ -67,7 +70,9 @@ static rwlock_t		smb_ipc_lock;
 void
 smb_load_kconfig(smb_kmod_cfg_t *kcfg)
 {
+	struct utsname uts;
 	int64_t citem;
+	int rc;
 
 	bzero(kcfg, sizeof (smb_kmod_cfg_t));
 
@@ -89,12 +94,33 @@ smb_load_kconfig(smb_kmod_cfg_t *kcfg)
 	kcfg->skc_restrict_anon = smb_config_getbool(SMB_CI_RESTRICT_ANON);
 	kcfg->skc_signing_enable = smb_config_getbool(SMB_CI_SIGNING_ENABLE);
 	kcfg->skc_signing_required = smb_config_getbool(SMB_CI_SIGNING_REQD);
+	kcfg->skc_netbios_enable = smb_config_getbool(SMB_CI_NETBIOS_ENABLE);
 	kcfg->skc_ipv6_enable = smb_config_getbool(SMB_CI_IPV6_ENABLE);
 	kcfg->skc_print_enable = smb_config_getbool(SMB_CI_PRINT_ENABLE);
 	kcfg->skc_oplock_enable = smb_config_getbool(SMB_CI_OPLOCK_ENABLE);
 	kcfg->skc_sync_enable = smb_config_getbool(SMB_CI_SYNC_ENABLE);
 	kcfg->skc_traverse_mounts = smb_config_getbool(SMB_CI_TRAVERSE_MOUNTS);
+	kcfg->skc_smb2_enable = smb_config_getbool(SMB_CI_SMB2_ENABLE);
 	kcfg->skc_secmode = smb_config_get_secmode();
+
+	rc = smb_config_getnum(SMB_CI_MAXIMUM_CREDITS, &citem);
+	if (rc != SMBD_SMF_OK)
+		citem = SMB_PI_MAX_CREDITS;
+	if (citem < SMB_PI_MIN_CREDITS)
+		citem = SMB_PI_MIN_CREDITS;
+	if (citem > SMB_PI_MAX_CREDITS)
+		citem = SMB_PI_MAX_CREDITS;
+	kcfg->skc_maximum_credits = (uint16_t)citem;
+
+	rc = smb_config_getnum(SMB_CI_INITIAL_CREDITS, &citem);
+	if (rc != SMBD_SMF_OK)
+		citem = SMB_PI_MIN_CREDITS;
+	if (citem < SMB_PI_MIN_CREDITS)
+		citem = SMB_PI_MIN_CREDITS;
+	if (citem > kcfg->skc_maximum_credits)
+		citem = kcfg->skc_maximum_credits;
+	kcfg->skc_initial_credits = (uint16_t)citem;
+
 	(void) smb_getdomainname(kcfg->skc_nbdomain,
 	    sizeof (kcfg->skc_nbdomain));
 	(void) smb_getfqdomainname(kcfg->skc_fqdn,
@@ -105,6 +131,18 @@ smb_load_kconfig(smb_kmod_cfg_t *kcfg)
 	    sizeof (kcfg->skc_system_comment));
 	smb_config_get_version(&kcfg->skc_version);
 	kcfg->skc_execflags = smb_config_get_execinfo(NULL, NULL, 0);
+	if (smb_config_get_localuuid(kcfg->skc_machine_uuid) < 0) {
+		syslog(LOG_ERR, "smb_load_kconfig: no machine_uuid");
+		uuid_generate_time(kcfg->skc_machine_uuid);
+	}
+	/* skc_negtok, skc_negtok_len: see smbd_authsvc.c */
+
+	(void) uname(&uts);
+	(void) snprintf(kcfg->skc_native_os, sizeof (kcfg->skc_native_os),
+	    "%s %s %s", uts.sysname, uts.release, uts.version);
+
+	(void) strlcpy(kcfg->skc_native_lm, "Native SMB service",
+	    sizeof (kcfg->skc_native_lm));
 }
 
 /*
@@ -514,12 +552,16 @@ smb_tracef(const char *fmt, ...)
 }
 
 /*
- * Temporary fbt for dtrace until user space sdt enabled.
+ * This function is designed to be used with dtrace, i.e. see:
+ * usr/src/cmd/smbsrv/dtrace/smbd-all.d
+ *
+ * Outside of dtrace, the messages passed to this function usually
+ * lack sufficient context to be useful, so don't log them.
  */
+/* ARGSUSED */
 void
 smb_trace(const char *s)
 {
-	syslog(LOG_DEBUG, "%s", s);
 }
 
 /*

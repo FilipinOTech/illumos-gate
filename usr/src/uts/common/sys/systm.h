@@ -21,10 +21,12 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ */
+/*
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef _SYS_SYSTM_H
@@ -54,7 +56,8 @@ typedef uintptr_t pc_t;
  * Random set of variables used by more than one routine.
  */
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
+#include <sys/types32.h>
 #include <sys/varargs.h>
 #include <sys/uadmin.h>
 
@@ -69,7 +72,7 @@ extern char wake_sched;		/* causes clock to wake swapper on next tick */
 extern char wake_sched_sec;	/* causes clock to wake swapper after a sec */
 
 extern pgcnt_t	maxmem;		/* max available memory (pages) */
-extern pgcnt_t	physmem;	/* physical memory (pages) on this CPU */
+extern volatile pgcnt_t	physmem; /* physical memory (pages) on this CPU */
 extern pfn_t	physmax;	/* highest numbered physical page present */
 extern pgcnt_t	physinstalled;	/* physical pages including PROM/boot use */
 
@@ -81,7 +84,8 @@ extern caddr_t	e_data;		/* end of kernel text segment */
 extern pgcnt_t	availrmem;	/* Available resident (not swapable)	*/
 				/* memory in pages.			*/
 extern pgcnt_t	availrmem_initial;	/* initial value of availrmem	*/
-extern pgcnt_t	segspt_minfree;	/* low water mark for availrmem in seg_spt */
+extern volatile pgcnt_t	segspt_minfree;	/* low water mark for availrmem */
+					/* in seg_spt			*/
 extern pgcnt_t	freemem;	/* Current free memory.			*/
 
 extern dev_t	rootdev;	/* device of the root */
@@ -93,7 +97,7 @@ extern char *volatile panicstr;	/* panic string pointer */
 extern va_list  panicargs;	/* panic arguments */
 extern volatile int quiesce_active;	/* quiesce(9E) is in progress */
 
-extern int	rstchown;	/* 1 ==> restrictive chown(2) semantics */
+extern volatile int rstchown;	/* 1 ==> restrictive chown(2) semantics */
 extern int	klustsize;
 
 extern int	abort_enable;	/* Platform input-device abort policy */
@@ -104,7 +108,7 @@ extern int	avenrun[];	/* array of load averages */
 
 extern char *isa_list;		/* For sysinfo's isalist option */
 
-extern int noexec_user_stack;		/* patchable via /etc/system */
+extern volatile int noexec_user_stack;	/* patchable via /etc/system */
 extern int noexec_user_stack_log;	/* patchable via /etc/system */
 
 /*
@@ -193,7 +197,9 @@ int strident_valid(const char *);
 void strident_canon(char *, size_t);
 int getsubopt(char **optionsp, char * const *tokens, char **valuep);
 char *append_subopt(const char *, size_t, char *, const char *);
+#ifndef	_FAKE_KERNEL
 int ffs(uintmax_t);
+#endif
 int copyin(const void *, void *, size_t);
 void copyin_noerr(const void *, void *, size_t);
 int xcopyin(const void *, void *, size_t);
@@ -246,7 +252,7 @@ int suword64(void *, uint64_t);
 void suword64_noerr(void *, uint64_t);
 #endif
 
-#if !defined(_BOOT)
+#if !defined(_BOOT) && !defined(_FAKE_KERNEL)
 int setjmp(label_t *) __RETURNS_TWICE;
 extern void longjmp(label_t *)
 	__NORETURN;
@@ -303,8 +309,8 @@ extern void	uniqtime32(struct timeval32 *);
 uint_t page_num_pagesizes(void);
 size_t page_get_pagesize(uint_t n);
 
-extern int maxusers;
-extern int pidmax;
+extern volatile int maxusers;
+extern volatile int pidmax;
 
 extern void param_preset(void);
 extern void param_calc(int);
@@ -382,7 +388,7 @@ union rval {
 
 typedef union rval rval_t;
 
-#ifdef	_KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 extern void reset_syscall_args(void);
 extern int save_syscall_args(void);
@@ -421,7 +427,7 @@ extern int start_init_common(void);
 
 #endif	/* _KERNEL */
 
-#if defined(_KERNEL) || defined(_BOOT)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL) || defined(_BOOT)
 
 size_t strlcat(char *, const char *, size_t);
 size_t strlen(const char *) __PURE;
@@ -429,6 +435,13 @@ char *strcat(char *, const char *);
 char *strncat(char *, const char *, size_t);
 char *strcpy(char *, const char *);
 char *strncpy(char *, const char *, size_t);
+
+extern size_t strlcpy(char *, const char *, size_t);
+extern size_t strspn(const char *, const char *);
+extern size_t strcspn(const char *, const char *);
+extern char *strdup(const char *);
+extern void strfree(char *);
+
 /* Need to be consistent with <string.h> C++ definitions */
 #if __cplusplus >= 199711L
 extern const char *strchr(const char *, int);

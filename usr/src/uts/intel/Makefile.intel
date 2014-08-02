@@ -19,8 +19,8 @@
 #
 
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2012 Nexenta Systems, Inc. All rights reserved.
 # Copyright (c) 2013 Andrew Stormont.  All rights reserved.
+# Copyright 2013 Nexenta Systems, Inc. All rights reserved.
 
 #
 #	This makefile contains the common definitions for all intel
@@ -320,6 +320,7 @@ DRV_KMODS	+= sd
 DRV_KMODS	+= sdhost
 DRV_KMODS	+= sgen
 DRV_KMODS	+= si3124
+DRV_KMODS	+= skd
 DRV_KMODS	+= smbios
 DRV_KMODS	+= softmac
 DRV_KMODS	+= spdsock
@@ -359,6 +360,7 @@ DRV_KMODS	+= simnet
 DRV_KMODS	+= stmf
 DRV_KMODS	+= stmf_sbd
 DRV_KMODS	+= fct
+DRV_KMODS	+= aoe aoeblk
 DRV_KMODS	+= fcoe
 DRV_KMODS	+= fcoet
 DRV_KMODS	+= fcoei
@@ -397,12 +399,9 @@ DRV_KMODS	+= vr
 #
 # Virtio drivers
 #
-
-# Virtio core
 DRV_KMODS	+= virtio
-
-# Virtio block driver
 DRV_KMODS	+= vioblk
+DRV_KMODS	+= vioif
 
 #
 #	DTrace and DTrace Providers
@@ -438,6 +437,8 @@ DRV_KMODS	+= fcsm
 DRV_KMODS	+= fp
 DRV_KMODS	+= qlc
 DRV_KMODS	+= iscsi
+DRV_KMODS	+= pvscsi
+DRV_KMODS	+= vmxnet3s
 
 #
 #	PCMCIA specific module(s)

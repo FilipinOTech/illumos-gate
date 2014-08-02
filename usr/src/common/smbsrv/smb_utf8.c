@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -210,7 +212,7 @@ smb_wcstombs(char *mbstring, const smb_wchar_t *wcstring, size_t nbytes)
 {
 	char *start = mbstring;
 	const smb_wchar_t *wcp = wcstring;
-	smb_wchar_t wide_char;
+	smb_wchar_t wide_char = 0;
 	char buf[4];
 	size_t len;
 

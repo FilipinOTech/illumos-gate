@@ -21,11 +21,12 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
 #include <sys/conf.h>
+#include <sys/list.h>
 #include <sys/file.h>
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
@@ -110,7 +111,7 @@ static dev_info_t	*sbd_dip;
 static uint32_t		sbd_lu_count = 0;
 
 /* Global property settings for the logical unit */
-char sbd_vendor_id[]	= "SUN     ";
+char sbd_vendor_id[]	= "NEXENTA ";
 char sbd_product_id[]	= "COMSTAR         ";
 char sbd_revision[]	= "1.0 ";
 char *sbd_mgmt_url = NULL;
@@ -154,7 +155,7 @@ static struct dev_ops sbd_ops = {
 	NULL			/* power */
 };
 
-#define	SBD_NAME	"COMSTAR SBD"
+#define	SBD_NAME	"COMSTAR SBD+ "
 
 static struct modldrv modldrv = {
 	&mod_driverops,
@@ -271,6 +272,8 @@ sbd_getinfo(dev_info_t *dip, ddi_info_cmd_t cmd, void *arg, void **result)
 static int
 sbd_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 {
+	char	*prop;
+
 	switch (cmd) {
 	case DDI_ATTACH:
 		sbd_dip = dip;
@@ -280,6 +283,17 @@ sbd_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 			break;
 		}
 		ddi_report_dev(dip);
+
+		if (ddi_prop_lookup_string(DDI_DEV_T_ANY, dip,
+		    DDI_PROP_DONTPASS, "vendor-id", &prop) == DDI_SUCCESS)
+			(void) snprintf(sbd_vendor_id, 9, "%s%8s", prop, "");
+		if (ddi_prop_lookup_string(DDI_DEV_T_ANY, dip,
+		    DDI_PROP_DONTPASS, "product-id", &prop) == DDI_SUCCESS)
+			(void) snprintf(sbd_product_id, 17, "%s%16s", prop, "");
+		if (ddi_prop_lookup_string(DDI_DEV_T_ANY, dip,
+		    DDI_PROP_DONTPASS, "revision", &prop) == DDI_SUCCESS)
+			(void) snprintf(sbd_revision, 5, "%s%4s", prop, "");
+
 		return (DDI_SUCCESS);
 	}
 
@@ -1440,6 +1454,7 @@ sbd_populate_and_register_lu(sbd_lu_t *sl, uint32_t *err_ret)
 	lu->lu_send_status_done = sbd_send_status_done;
 	lu->lu_task_free = sbd_task_free;
 	lu->lu_abort = sbd_abort;
+	lu->lu_task_poll = sbd_task_poll;
 	lu->lu_dbuf_free = sbd_dbuf_free;
 	lu->lu_ctl = sbd_ctl;
 	lu->lu_info = sbd_info;
@@ -1454,6 +1469,12 @@ sbd_populate_and_register_lu(sbd_lu_t *sl, uint32_t *err_ret)
 		return (EIO);
 	}
 
+	/*
+	 * setup the ATS (compare and write) lists to handle multiple
+	 * ATS commands simultaneously
+	 */
+	list_create(&sl->sl_ats_io_list, sizeof (ats_state_t),
+			offsetof(ats_state_t, as_next));
 	*err_ret = 0;
 	return (0);
 }
@@ -2998,6 +3019,7 @@ sbd_data_read(sbd_lu_t *sl, struct scsi_task *task,
 {
 	int ret;
 	long resid;
+	hrtime_t xfer_start;
 
 	if ((offset + size) > sl->sl_lu_size) {
 		return (SBD_IO_PAST_EOF);
@@ -3016,6 +3038,7 @@ sbd_data_read(sbd_lu_t *sl, struct scsi_task *task,
 		size = store_end;
 	}
 
+	xfer_start = gethrtime();
 	DTRACE_PROBE5(backing__store__read__start, sbd_lu_t *, sl,
 	    uint8_t *, buf, uint64_t, size, uint64_t, offset,
 	    scsi_task_t *, task);
@@ -3031,11 +3054,14 @@ sbd_data_read(sbd_lu_t *sl, struct scsi_task *task,
 		rw_exit(&sl->sl_access_state_lock);
 		return (SBD_FAILURE);
 	}
+
 	ret = vn_rdwr(UIO_READ, sl->sl_data_vp, (caddr_t)buf, (ssize_t)size,
 	    (offset_t)offset, UIO_SYSSPACE, 0, RLIM64_INFINITY, CRED(),
 	    &resid);
 	rw_exit(&sl->sl_access_state_lock);
 
+	stmf_lu_xfer_done(task, B_TRUE /* read */,
+	    (gethrtime() - xfer_start));
 	DTRACE_PROBE6(backing__store__read__end, sbd_lu_t *, sl,
 	    uint8_t *, buf, uint64_t, size, uint64_t, offset,
 	    int, ret, scsi_task_t *, task);
@@ -3058,6 +3084,7 @@ sbd_data_write(sbd_lu_t *sl, struct scsi_task *task,
 	long resid;
 	sbd_status_t sret = SBD_SUCCESS;
 	int ioflag;
+	hrtime_t xfer_start;
 
 	if ((offset + size) > sl->sl_lu_size) {
 		return (SBD_IO_PAST_EOF);
@@ -3072,6 +3099,7 @@ sbd_data_write(sbd_lu_t *sl, struct scsi_task *task,
 		ioflag = 0;
 	}
 
+	xfer_start = gethrtime();
 	DTRACE_PROBE5(backing__store__write__start, sbd_lu_t *, sl,
 	    uint8_t *, buf, uint64_t, size, uint64_t, offset,
 	    scsi_task_t *, task);
@@ -3092,6 +3120,8 @@ sbd_data_write(sbd_lu_t *sl, struct scsi_task *task,
 	    &resid);
 	rw_exit(&sl->sl_access_state_lock);
 
+	stmf_lu_xfer_done(task, B_FALSE /* write */,
+	    (gethrtime() - xfer_start));
 	DTRACE_PROBE6(backing__store__write__end, sbd_lu_t *, sl,
 	    uint8_t *, buf, uint64_t, size, uint64_t, offset,
 	    int, ret, scsi_task_t *, task);
@@ -3715,4 +3745,25 @@ sbd_unmap(sbd_lu_t *sl, uint64_t offset, uint64_t length)
 
 	return (VOP_IOCTL(vp, DKIOCFREE, (intptr_t)(&df), FKIOCTL, kcred,
 	    &unused, NULL));
+}
+
+/*
+ * Check if this lu belongs to sbd or some other lu
+ * provider. A simple check for one of the module
+ * entry points is sufficient.
+ */
+int
+sbd_is_valid_lu(stmf_lu_t *lu)
+{
+	if (lu->lu_new_task == sbd_new_task)
+		return (1);
+	return (0);
+}
+
+uint8_t
+sbd_get_lbasize_shift(stmf_lu_t *lu)
+{
+	sbd_lu_t *sl = (sbd_lu_t *)lu->lu_provider_private;
+
+	return (sl->sl_data_blocksize_shift);
 }

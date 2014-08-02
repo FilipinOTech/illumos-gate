@@ -580,28 +580,22 @@ static boolean_t l2arc_write_eligible(uint64_t spa_guid, arc_buf_hdr_t *ab);
  * Hash table routines
  */
 
-#define	HT_LOCK_PAD	64
-
-struct ht_lock {
-	kmutex_t	ht_lock;
-#ifdef _KERNEL
-	unsigned char	pad[(HT_LOCK_PAD - sizeof (kmutex_t))];
-#endif
+struct ht_table {
+	arc_buf_hdr_t	*hdr;
+	kmutex_t	lock;
 };
 
-#define	BUF_LOCKS 256
 typedef struct buf_hash_table {
 	uint64_t ht_mask;
-	arc_buf_hdr_t **ht_table;
-	struct ht_lock ht_locks[BUF_LOCKS];
+	struct ht_table *ht_table;
 } buf_hash_table_t;
 
+#pragma align 64(buf_hash_table)
 static buf_hash_table_t buf_hash_table;
 
 #define	BUF_HASH_INDEX(spa, dva, birth) \
 	(buf_hash(spa, dva, birth) & buf_hash_table.ht_mask)
-#define	BUF_HASH_LOCK_NTRY(idx) (buf_hash_table.ht_locks[idx & (BUF_LOCKS-1)])
-#define	BUF_HASH_LOCK(idx)	(&(BUF_HASH_LOCK_NTRY(idx).ht_lock))
+#define	BUF_HASH_LOCK(idx) (&buf_hash_table.ht_table[idx].lock)
 #define	HDR_LOCK(hdr) \
 	(BUF_HASH_LOCK(BUF_HASH_INDEX(hdr->b_spa, &hdr->b_dva, hdr->b_birth)))
 
@@ -754,7 +748,7 @@ buf_hash_find(uint64_t spa, const blkptr_t *bp, kmutex_t **lockp)
 	arc_buf_hdr_t *buf;
 
 	mutex_enter(hash_lock);
-	for (buf = buf_hash_table.ht_table[idx]; buf != NULL;
+	for (buf = buf_hash_table.ht_table[idx].hdr; buf != NULL;
 	    buf = buf->b_hash_next) {
 		if (BUF_EQUAL(spa, dva, birth, buf)) {
 			*lockp = hash_lock;
@@ -785,14 +779,14 @@ buf_hash_insert(arc_buf_hdr_t *buf, kmutex_t **lockp)
 	ASSERT(!HDR_IN_HASH_TABLE(buf));
 	*lockp = hash_lock;
 	mutex_enter(hash_lock);
-	for (fbuf = buf_hash_table.ht_table[idx], i = 0; fbuf != NULL;
+	for (fbuf = buf_hash_table.ht_table[idx].hdr, i = 0; fbuf != NULL;
 	    fbuf = fbuf->b_hash_next, i++) {
 		if (BUF_EQUAL(buf->b_spa, &buf->b_dva, buf->b_birth, fbuf))
 			return (fbuf);
 	}
 
-	buf->b_hash_next = buf_hash_table.ht_table[idx];
-	buf_hash_table.ht_table[idx] = buf;
+	buf->b_hash_next = buf_hash_table.ht_table[idx].hdr;
+	buf_hash_table.ht_table[idx].hdr = buf;
 	buf->b_flags |= ARC_IN_HASH_TABLE;
 
 	/* collect some hash table performance data */
@@ -819,7 +813,7 @@ buf_hash_remove(arc_buf_hdr_t *buf)
 	ASSERT(MUTEX_HELD(BUF_HASH_LOCK(idx)));
 	ASSERT(HDR_IN_HASH_TABLE(buf));
 
-	bufp = &buf_hash_table.ht_table[idx];
+	bufp = &buf_hash_table.ht_table[idx].hdr;
 	while ((fbuf = *bufp) != buf) {
 		ASSERT(fbuf != NULL);
 		bufp = &fbuf->b_hash_next;
@@ -831,8 +825,8 @@ buf_hash_remove(arc_buf_hdr_t *buf)
 	/* collect some hash table performance data */
 	ARCSTAT_BUMPDOWN(arcstat_hash_elements);
 
-	if (buf_hash_table.ht_table[idx] &&
-	    buf_hash_table.ht_table[idx]->b_hash_next == NULL)
+	if (buf_hash_table.ht_table[idx].hdr &&
+	    buf_hash_table.ht_table[idx].hdr->b_hash_next == NULL)
 		ARCSTAT_BUMPDOWN(arcstat_hash_chains);
 }
 
@@ -847,10 +841,10 @@ buf_fini(void)
 {
 	int i;
 
+	for (i = 0; i < buf_hash_table.ht_mask + 1; i++)
+		mutex_destroy(&buf_hash_table.ht_table[i].lock);
 	kmem_free(buf_hash_table.ht_table,
-	    (buf_hash_table.ht_mask + 1) * sizeof (void *));
-	for (i = 0; i < BUF_LOCKS; i++)
-		mutex_destroy(&buf_hash_table.ht_locks[i].ht_lock);
+	    (buf_hash_table.ht_mask + 1) * sizeof (struct ht_table));
 	kmem_cache_destroy(hdr_cache);
 	kmem_cache_destroy(buf_cache);
 }
@@ -948,7 +942,7 @@ buf_init(void)
 retry:
 	buf_hash_table.ht_mask = hsize - 1;
 	buf_hash_table.ht_table =
-	    kmem_zalloc(hsize * sizeof (void*), KM_NOSLEEP);
+	    kmem_zalloc(hsize * sizeof (struct ht_table), KM_NOSLEEP);
 	if (buf_hash_table.ht_table == NULL) {
 		ASSERT(hsize > (1ULL << 8));
 		hsize >>= 1;
@@ -964,8 +958,8 @@ retry:
 		for (ct = zfs_crc64_table + i, *ct = i, j = 8; j > 0; j--)
 			*ct = (*ct >> 1) ^ (-(*ct & 1) & ZFS_CRC64_POLY);
 
-	for (i = 0; i < BUF_LOCKS; i++) {
-		mutex_init(&buf_hash_table.ht_locks[i].ht_lock,
+	for (i = 0; i < hsize; i++) {
+		mutex_init(&buf_hash_table.ht_table[i].lock,
 		    NULL, MUTEX_DEFAULT, NULL);
 	}
 }
@@ -1776,6 +1770,8 @@ arc_buf_eviction_needed(arc_buf_t *buf)
 	return (evict_needed);
 }
 
+int zfs_fastflush = 1;
+
 /*
  * Evict buffers from list until we've removed the specified number of
  * bytes.  Move the removed buffers to the appropriate evict state.
@@ -2137,36 +2133,33 @@ arc_do_user_evicts(void)
 	mutex_exit(&arc_eviction_mtx);
 }
 
-/*
- * Flush all *evictable* data from the cache for the given spa.
- * NOTE: this will not touch "active" (i.e. referenced) data.
- */
-void
-arc_flush(spa_t *spa)
+typedef struct arc_async_flush_data {
+	uint64_t	aaf_guid;
+} arc_async_flush_data_t;
+
+static taskq_t *arc_flush_taskq;
+
+static void
+_arc_flush(uint64_t guid)
 {
-	uint64_t guid = 0;
-
-	if (spa)
-		guid = spa_load_guid(spa);
-
 	while (list_head(&arc_mru->arcs_list[ARC_BUFC_DATA])) {
 		(void) arc_evict(arc_mru, guid, -1, FALSE, ARC_BUFC_DATA);
-		if (spa)
+		if (guid)
 			break;
 	}
 	while (list_head(&arc_mru->arcs_list[ARC_BUFC_METADATA])) {
 		(void) arc_evict(arc_mru, guid, -1, FALSE, ARC_BUFC_METADATA);
-		if (spa)
+		if (guid)
 			break;
 	}
 	while (list_head(&arc_mfu->arcs_list[ARC_BUFC_DATA])) {
 		(void) arc_evict(arc_mfu, guid, -1, FALSE, ARC_BUFC_DATA);
-		if (spa)
+		if (guid)
 			break;
 	}
 	while (list_head(&arc_mfu->arcs_list[ARC_BUFC_METADATA])) {
 		(void) arc_evict(arc_mfu, guid, -1, FALSE, ARC_BUFC_METADATA);
-		if (spa)
+		if (guid)
 			break;
 	}
 
@@ -2176,7 +2169,54 @@ arc_flush(spa_t *spa)
 	mutex_enter(&arc_reclaim_thr_lock);
 	arc_do_user_evicts();
 	mutex_exit(&arc_reclaim_thr_lock);
-	ASSERT(spa || arc_eviction_list == NULL);
+}
+
+static void
+arc_flush_task(void *arg)
+{
+	arc_async_flush_data_t *aaf = (arc_async_flush_data_t *)arg;
+	_arc_flush(aaf->aaf_guid);
+	kmem_free(aaf, sizeof (arc_async_flush_data_t));
+}
+
+/*
+ * Flush all *evictable* data from the cache for the given spa.
+ * NOTE: this will not touch "active" (i.e. referenced) data.
+ */
+void
+arc_flush(spa_t *spa)
+{
+	uint64_t guid = 0;
+	boolean_t async_flush = (spa ? zfs_fastflush : FALSE);
+	arc_async_flush_data_t *aaf = NULL;
+
+	if (spa) {
+		guid = spa_load_guid(spa);
+		if (async_flush) {
+			aaf = kmem_alloc(sizeof (arc_async_flush_data_t),
+			    KM_SLEEP);
+			aaf->aaf_guid = guid;
+		}
+	}
+
+	/*
+	 * Try to flush per-spa remaining ARC ghost buffers and buffers in
+	 * arc_eviction_list asynchronously while a pool is being closed.
+	 * An ARC buffer is bound to spa only by guid, so buffer can
+	 * exist even when pool has already gone. If asynchronous flushing
+	 * fails we fall back to regular (synchronous) one.
+	 * NOTE: If asynchronous flushing had not yet finished when the pool
+	 * was imported again it wouldn't be a problem, even when guids before
+	 * and after export/import are the same. We can evict only unreferenced
+	 * buffers, other are skipped.
+	 */
+	if (!async_flush || (taskq_dispatch(arc_flush_taskq, arc_flush_task,
+	    aaf, TQ_NOSLEEP) == NULL)) {
+		_arc_flush(guid);
+		ASSERT(spa || arc_eviction_list == NULL);
+		if (async_flush)
+			kmem_free(aaf, sizeof (arc_async_flush_data_t));
+	}
 }
 
 void
@@ -3718,6 +3758,9 @@ arc_tempreserve_space(uint64_t reserve, uint64_t txg)
 	return (0);
 }
 
+/* Tuneable, default is 64, which is essentially arbitrary */
+int zfs_flush_ntasks = 64;
+
 void
 arc_init(void)
 {
@@ -3821,6 +3864,8 @@ arc_init(void)
 	list_create(&arc_l2c_only->arcs_list[ARC_BUFC_DATA],
 	    sizeof (arc_buf_hdr_t), offsetof(arc_buf_hdr_t, b_arc_node));
 
+	arc_flush_taskq = taskq_create("arc_flush_tq",
+	    max_ncpus, minclsyspri, 1, zfs_flush_ntasks, TASKQ_DYNAMIC);
 	buf_init();
 
 	arc_thread_exit = 0;
@@ -3896,6 +3941,7 @@ arc_fini(void)
 	mutex_destroy(&arc_mfu_ghost->arcs_mtx);
 	mutex_destroy(&arc_l2c_only->arcs_mtx);
 
+	taskq_destroy(arc_flush_taskq);
 	buf_fini();
 
 	ASSERT(arc_loaned_bytes == 0);
@@ -4421,7 +4467,8 @@ l2arc_list_locked(int list_num, kmutex_t **lock)
  * If the 'all' boolean is set, every buffer is evicted.
  */
 static void
-l2arc_evict(l2arc_dev_t *dev, uint64_t distance, boolean_t all)
+_l2arc_evict(l2arc_dev_t *dev, uint64_t distance, boolean_t all,
+    boolean_t space_update)
 {
 	list_t *buflist;
 	l2arc_buf_hdr_t *abl2;
@@ -4545,7 +4592,90 @@ top:
 	mutex_exit(&l2arc_buflist_mtx);
 
 	vdev_space_update(dev->l2ad_vdev, -bytes_evicted, 0, 0);
-	dev->l2ad_evict = taddr;
+
+	if (space_update) {
+		dev->l2ad_evict = taddr;
+	}
+}
+
+/*
+ * Asynchronous task for eviction of all the buffers for this L2ARC device
+ * The task is dispatched in l2arc_evict()
+ */
+typedef struct {
+	l2arc_dev_t *dev;
+} l2arc_evict_data_t;
+
+static void
+l2arc_evict_task(void *arg)
+{
+	l2arc_evict_data_t *d = (l2arc_evict_data_t *)arg;
+	ASSERT(d && d->dev);
+
+	/*
+	 * Evict l2arc buffers asynchronously; we need to keep the device
+	 * around until we are sure there aren't any buffers referencing it.
+	 * We do not need to hold any config locks, etc. because at this point,
+	 * we are the only ones who knows about this device (the in-core
+	 * structure), so no new buffers can be created (e.g. if the pool is
+	 * re-imported while the asynchronous eviction is in progress) that
+	 * reference this same in-core structure
+	 */
+	_l2arc_evict(d->dev, 0LL, B_TRUE, B_FALSE);
+
+	/* Same cleanup as in the synchronous path */
+	list_destroy(d->dev->l2ad_buflist);
+	kmem_free(d->dev->l2ad_buflist, sizeof (list_t));
+	kmem_free(d->dev, sizeof (l2arc_dev_t));
+	/* Task argument cleanup */
+	kmem_free(arg, sizeof (l2arc_evict_data_t));
+}
+
+boolean_t zfs_l2arc_async_evict = B_TRUE;
+
+/*
+ * Perform l2arc eviction for buffers associated with this device
+ * If evicting all buffers (done at pool export time), try to evict
+ * asynchronously, and fall back to synchronous eviction in case of error
+ * Tell the caller whether to cleanup the device:
+ *  - B_TRUE means "asynchronous eviction, do not cleanup"
+ *  - B_FALSE means "synchronous eviction, done, please cleanup"
+ */
+static boolean_t
+l2arc_evict(l2arc_dev_t *dev, uint64_t distance, boolean_t all)
+{
+	/*
+	 *  If we are evicting all the buffers for this device, which happens
+	 *  at pool export time, schedule asynchronous task
+	 */
+	if (all && zfs_l2arc_async_evict) {
+		l2arc_evict_data_t *arg =
+		    kmem_alloc(sizeof (l2arc_evict_data_t), KM_SLEEP);
+		arg->dev = dev;
+
+		dev->l2ad_evict = dev->l2ad_end;
+
+		if ((taskq_dispatch(arc_flush_taskq, l2arc_evict_task,
+		    arg, TQ_NOSLEEP) == NULL)) {
+			/*
+			 * Failed to dispatch asynchronous task
+			 * cleanup, evict synchronously, avoid adjusting
+			 * vdev space second time
+			 */
+			kmem_free(arg, sizeof (l2arc_evict_data_t));
+			_l2arc_evict(dev, distance, all, B_FALSE);
+		} else {
+			/*
+			 * Successfull dispatch, vdev space updated
+			 */
+			return (B_TRUE);
+		}
+	} else {
+		/* Evict synchronously */
+		_l2arc_evict(dev, distance, all, B_TRUE);
+	}
+
+	return (B_FALSE);
 }
 
 /*
@@ -5035,8 +5165,9 @@ l2arc_feed_thread(void)
 
 		/*
 		 * Evict L2ARC buffers that will be overwritten.
+		 * B_FALSE guarantees synchronous eviction.
 		 */
-		l2arc_evict(dev, size, B_FALSE);
+		(void) l2arc_evict(dev, size, B_FALSE);
 
 		/*
 		 * Write ARC buffers.
@@ -5147,10 +5278,15 @@ l2arc_remove_vdev(vdev_t *vd)
 	/*
 	 * Clear all buflists and ARC references.  L2ARC device flush.
 	 */
-	l2arc_evict(remdev, 0, B_TRUE);
-	list_destroy(remdev->l2ad_buflist);
-	kmem_free(remdev->l2ad_buflist, sizeof (list_t));
-	kmem_free(remdev, sizeof (l2arc_dev_t));
+	if (l2arc_evict(remdev, 0, B_TRUE) == B_FALSE) {
+		/*
+		 * The eviction was done synchronously, cleanup here
+		 * Otherwise, the asynchronous task will cleanup
+		 */
+		list_destroy(remdev->l2ad_buflist);
+		kmem_free(remdev->l2ad_buflist, sizeof (list_t));
+		kmem_free(remdev, sizeof (l2arc_dev_t));
+	}
 }
 
 void

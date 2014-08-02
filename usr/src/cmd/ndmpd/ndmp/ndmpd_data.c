@@ -1373,6 +1373,7 @@ ndmpd_tar_start_backup_v3(ndmpd_session_t *session, char *bu_type,
 	ndmp_lbr_params_t *nlp;
 	ndmpd_module_params_t *params;
 	ndmp_data_start_backup_reply_v3 reply;
+	pthread_t tid;
 
 	(void) memset((void*)&reply, 0, sizeof (reply));
 
@@ -1465,13 +1466,16 @@ ndmpd_tar_start_backup_v3(ndmpd_session_t *session, char *bu_type,
 	 * Cannot wait for the thread to exit as we are replying to the
 	 * client request here.
 	 */
-	err = pthread_create(NULL, NULL,
+	err = pthread_create(&tid, NULL,
 	    (funct_t)session->ns_data.dd_module.dm_start_func,
 	    params);
+
 	if (err != 0) {
-		NDMP_LOG(LOG_ERR, "Can't start backup session.");
+		NDMP_LOG(LOG_ERR, "Can't start V3 backup session.");
 		return (NDMP_ILLEGAL_ARGS_ERR);
 	}
+
+	(void) pthread_detach(tid);
 
 	return (NDMP_NO_ERR);
 }
@@ -1501,6 +1505,7 @@ ndmpd_tar_start_recover_v3(ndmpd_session_t *session,
 	ndmp_data_start_recover_reply_v3 reply;
 	ndmpd_module_params_t *params;
 	ndmp_lbr_params_t *nlp;
+	pthread_t tid;
 	int err;
 
 	(void) memset((void*)&reply, 0, sizeof (reply));
@@ -1594,14 +1599,17 @@ ndmpd_tar_start_recover_v3(ndmpd_session_t *session,
 	 * Cannot wait for the thread to exit as we are replying to the
 	 * client request here.
 	 */
-	err = pthread_create(NULL, NULL,
+	err = pthread_create(&tid, NULL,
 	    (funct_t)session->ns_data.dd_module.dm_start_func,
 	    params);
 
 	if (err != 0) {
-		NDMP_LOG(LOG_ERR, "Can't start recover session.");
+		NDMP_LOG(LOG_ERR, "Can't start V3 recover session.");
 		return (NDMP_ILLEGAL_ARGS_ERR);
 	}
+
+	(void) pthread_detach(tid);
+
 	return (NDMP_NO_ERR);
 }
 
@@ -2067,6 +2075,7 @@ ndmpd_tar_start_backup_v2(ndmpd_session_t *session, char *bu_type,
 	ndmp_data_start_backup_reply reply;
 	ndmpd_module_params_t *params;
 	ndmp_lbr_params_t *nlp;
+	pthread_t tid;
 	int err;
 
 	if (session->ns_data.dd_state != NDMP_DATA_STATE_IDLE) {
@@ -2184,9 +2193,16 @@ ndmpd_tar_start_backup_v2(ndmpd_session_t *session, char *bu_type,
 	 * Cannot wait for the thread to exit as we are replying to the
 	 * client request here.
 	 */
-	(void) pthread_create(NULL, NULL,
+	(void) pthread_create(&tid, NULL,
 	    (funct_t)session->ns_data.dd_module.dm_start_func,
 	    params);
+
+	if (err) {
+		NDMP_LOG(LOG_ERR, "Can't start V2 backup session.");
+		return (NDMP_ILLEGAL_ARGS_ERR);
+	}
+
+	(void) pthread_detach(tid);
 
 	return (NDMP_NO_ERR);
 }
@@ -2216,6 +2232,7 @@ ndmpd_tar_start_recover_v2(ndmpd_session_t *session, char *bu_type,
 	ndmp_data_start_recover_reply_v2 reply;
 	ndmpd_module_params_t *params;
 	ndmp_lbr_params_t *nlp;
+	pthread_t tid;
 	int err;
 
 	if (session->ns_data.dd_state != NDMP_DATA_STATE_IDLE) {
@@ -2321,9 +2338,16 @@ ndmpd_tar_start_recover_v2(ndmpd_session_t *session, char *bu_type,
 	 * Cannot wait for the thread to exit as we are replying to the
 	 * client request here.
 	 */
-	(void) pthread_create(NULL, NULL,
+	(void) pthread_create(&tid, NULL,
 	    (funct_t)session->ns_data.dd_module.dm_start_func,
 	    params);
+
+	if (err != 0) {
+		NDMP_LOG(LOG_ERR, "Can't start V2 recover session.");
+		return (NDMP_ILLEGAL_ARGS_ERR);
+	}
+
+	(void) pthread_detach(tid);
 
 	return (NDMP_NO_ERR);
 }

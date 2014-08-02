@@ -92,6 +92,8 @@ ndmpd_cfg_param_t ndmpd_cfg_table[] =
 	{"zfs-force-override",		"",	0, NDMP_CF_NOTINIT},
 	{"drive-type",			"",	0, NDMP_CF_NOTINIT},
 	{"debug-mode",			"",	0, NDMP_CF_NOTINIT},
+	{"vendor-name",			"",	0, NDMP_CF_NOTINIT},
+	{"product-name",		"",	0, NDMP_CF_NOTINIT},
 };
 
 /*

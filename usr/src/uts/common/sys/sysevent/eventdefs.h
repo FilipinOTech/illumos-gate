@@ -210,6 +210,12 @@ extern "C" {
  */
 #define	ESC_DEV_DLE		"ESC_dev_dle"
 
+/* device retired */
+#define	ESC_DEV_RETIRE		"ESC_dev_retire"
+
+/* device unretire */
+#define	ESC_DEV_UNRETIRE	"ESC_dev_unretire"
+
 /* LUN has received an eject request from the user */
 #define	ESC_DEV_EJECT_REQUEST	"ESC_dev_eject_request"
 
@@ -258,6 +264,9 @@ extern "C" {
 #define	ESC_ZFS_VDEV_SPARE		"ESC_ZFS_vdev_spare"
 #define	ESC_ZFS_BOOTFS_VDEV_ATTACH	"ESC_ZFS_bootfs_vdev_attach"
 #define	ESC_ZFS_POOL_REGUID		"ESC_ZFS_pool_reguid"
+#define	ESC_ZFS_NONE_WATERMARK		"ESC_ZFS_none_watermark"
+#define	ESC_ZFS_LOW_WATERMARK		"ESC_ZFS_low_watermark"
+#define	ESC_ZFS_HIGH_WATERMARK		"ESC_ZFS_high_watermark"
 
 /*
  * datalink subclass definitions.

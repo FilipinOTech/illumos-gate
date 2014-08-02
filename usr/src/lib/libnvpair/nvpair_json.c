@@ -10,6 +10,7 @@
  */
 /*
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <stdio.h>
@@ -20,10 +21,10 @@
 
 #include "libnvpair.h"
 
-#define	FPRINTF(fp, ...)			\
+#define	FPRINTF(fp, ...) do {			\
 	if (fprintf(fp, __VA_ARGS__) < 0)	\
-		return (-1)			\
-
+		return (-1);			\
+_NOTE(CONSTCOND)} while (0)
 /*
  * When formatting a string for JSON output we must escape certain characters,
  * as described in RFC4627.  This applies to both member names and

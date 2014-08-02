@@ -20,8 +20,8 @@
  */
 
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/sdt.h>
@@ -355,15 +355,17 @@ smb_pre_write_andx(smb_request_t *sr)
 		    &off_low, &param->rw_mode, &remcnt, &datalen_high,
 		    &datalen_low, &param->rw_dsoff, &off_high);
 
-		param->rw_dsoff -= 63;
+		if (param->rw_dsoff > 63)
+			param->rw_dsoff -= 63;
 		param->rw_offset = ((uint64_t)off_high << 32) | off_low;
 	} else {
 		rc = smbsr_decode_vwv(sr, "4.wl4.wwwww", &sr->smb_fid,
 		    &off_low, &param->rw_mode, &remcnt, &datalen_high,
 		    &datalen_low, &param->rw_dsoff);
 
+		if (param->rw_dsoff > 59)
+			param->rw_dsoff -= 59;
 		param->rw_offset = (uint64_t)off_low;
-		param->rw_dsoff -= 59;
 	}
 
 	param->rw_count = (uint32_t)datalen_low;
@@ -480,7 +482,16 @@ smb_common_write(smb_request_t *sr, smb_rw_param_t *param)
 		if (rc)
 			return (rc);
 
-		smb_ofile_set_write_time_pending(ofile);
+		/*
+		 * Used to have code here to set mtime.
+		 * We have just done a write, so we know
+		 * the file system will update mtime.
+		 * No need to do it again here.
+		 *
+		 * However, keep track of the fact that
+		 * we have written data via this handle.
+		 */
+		ofile->f_written = B_TRUE;
 
 		if (!smb_node_is_dir(node))
 			smb_oplock_break_levelII(node);

@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -4516,6 +4517,7 @@ vfs_root_redev(vfs_t *vfsp, dev_t ndev, int fstype)
 extern int hvmboot_rootconf();
 #endif /* __x86 */
 
+extern char *aoepath_prop;
 extern ib_boot_prop_t *iscsiboot_prop;
 
 int
@@ -4558,18 +4560,20 @@ rootconf()
 	VFS_INIT(rootvfs, &vsw->vsw_vfsops, 0);
 	VFS_HOLD(rootvfs);
 
-	/* always mount readonly first */
+	/* Always mount readonly first */
 	rootvfs->vfs_flag |= VFS_RDONLY;
 
 	pm_init();
 
-	if (netboot && iscsiboot_prop) {
-		cmn_err(CE_WARN, "NFS boot and iSCSI boot"
-		    " shouldn't happen in the same time");
+	if ((aoepath_prop != NULL && (iscsiboot_prop != NULL || netboot)) ||
+	    (iscsiboot_prop != NULL && (aoepath_prop != NULL || netboot)) ||
+	    (netboot && (aoepath_prop != NULL || iscsiboot_prop != NULL))) {
+		cmn_err(CE_WARN, "Only one of AoE, iSCSI or NFS boot "
+		    "can be specified at time");
 		return (EINVAL);
 	}
 
-	if (netboot || iscsiboot_prop) {
+	if (aoepath_prop != NULL || iscsiboot_prop != NULL || netboot) {
 		ret = strplumb();
 		if (ret != 0) {
 			cmn_err(CE_WARN, "Cannot plumb network device %d", ret);
@@ -4577,20 +4581,28 @@ rootconf()
 		}
 	}
 
-	if ((ret == 0) && iscsiboot_prop) {
-		ret = modload("drv", "iscsi");
-		/* -1 indicates fail */
-		if (ret == -1) {
+	if (aoepath_prop != NULL) {
+		if (modload("drv", "aoe") == -1 ||
+		    modload("drv", "aoeblk") == -1) {
+			cmn_err(CE_WARN, "Failed to load aoe modules");
+			return (EINVAL);
+		}
+		if (i_ddi_attach_pseudo_node("aoe") == 0) {
+			cmn_err(CE_WARN, "Failed to attach aoe driver");
+			return (ENODEV);
+		}
+	}
+
+	if (iscsiboot_prop != NULL) {
+		if (modload("drv", "iscsi") == -1) {
 			cmn_err(CE_WARN, "Failed to load iscsi module");
 			iscsi_boot_prop_free();
 			return (EINVAL);
-		} else {
-			if (!i_ddi_attach_pseudo_node("iscsi")) {
-				cmn_err(CE_WARN,
-				    "Failed to attach iscsi driver");
-				iscsi_boot_prop_free();
-				return (ENODEV);
-			}
+		}
+		if (i_ddi_attach_pseudo_node("iscsi") == 0) {
+			cmn_err(CE_WARN, "Failed to attach iscsi driver");
+			iscsi_boot_prop_free();
+			return (ENODEV);
 		}
 	}
 
@@ -4598,7 +4610,7 @@ rootconf()
 	vfs_unrefvfssw(vsw);
 	rootdev = rootvfs->vfs_dev;
 
-	if (error)
+	if (error != 0)
 		cmn_err(CE_CONT, "Cannot mount root on %s fstype %s\n",
 		    rootfs.bo_name, fstyp);
 	else

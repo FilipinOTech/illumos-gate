@@ -22,6 +22,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -42,12 +44,12 @@
 
 #include <sys/feature_tests.h>
 
-#ifndef _KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 #if !defined(__XOPEN_OR_POSIX) || defined(_XPG6) || defined(__EXTENSIONS__)
 #include <sys/time_impl.h>
 #endif
 #include <sys/time.h>
-#endif /* _KERNEL */
+#endif /* !_KERNEL */
 
 #ifdef	__cplusplus
 extern "C" {
@@ -145,13 +147,13 @@ typedef	struct __fd_set {
 #define	FD_ISSET(__n, __p)	(((__p)->fds_bits[(__n)/FD_NFDBITS] & \
 				    (1ul << ((__n) % FD_NFDBITS))) != 0l)
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 #define	FD_ZERO(p)	bzero((p), sizeof (*(p)))
 #else
 #define	FD_ZERO(__p)    (void) memset((__p), 0, sizeof (*(__p)))
 #endif /* _KERNEL */
 
-#ifndef	_KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 #ifdef	__STDC__
 extern int select(int, fd_set *_RESTRICT_KYWD, fd_set *_RESTRICT_KYWD,
 	fd_set *_RESTRICT_KYWD, struct timeval *_RESTRICT_KYWD);
@@ -162,7 +164,7 @@ extern int pselect(int, fd_set *_RESTRICT_KYWD, fd_set *_RESTRICT_KYWD,
 	const sigset_t *_RESTRICT_KYWD);
 #endif
 
-#else
+#else /* _KERNEL */
 extern int select();
 #if !defined(__XOPEN_OR_POSIX) || defined(_XPG6) || defined(__EXTENSIONS__)
 extern int pselect();

@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2013 by Delphix. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
@@ -165,7 +166,15 @@ typedef struct raidz_map {
  */
 int vdev_raidz_default_to_general;
 
-/* Powers of 2 in the Galois field defined above. */
+/*
+ * xor_p hook for external acceleration libraries.
+ */
+int (*zfs_xorp_hook)(int vects, int len, void **array) = NULL;
+
+/*
+ * These two tables represent powers and logs of 2 in the Galois field defined
+ * above. These values were computed by repeatedly multiplying by 2 as above.
+ */
 static const uint8_t vdev_raidz_pow2[256] = {
 	0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
 	0x1d, 0x3a, 0x74, 0xe8, 0xcd, 0x87, 0x13, 0x26,
@@ -583,11 +592,87 @@ vdev_raidz_map_alloc(caddr_t data, uint64_t size, uint64_t offset,
 	return (rm);
 }
 
+/*
+ * software acceleration of XOR calculations, requirements
+ *
+ * the (src/dst) vectors needs to be 64 byte aligned
+ * all the vectors have to be the same size
+ */
+#define	RAIDZ_ACCELERATION_ALIGNMENT	64ul
+#define	UNALIGNED(addr)	\
+	((unsigned long)(addr) & (RAIDZ_ACCELERATION_ALIGNMENT-1))
+
 static void
 vdev_raidz_generate_parity_p(raidz_map_t *rm)
 {
 	uint64_t *p, *src, pcount, ccount, i;
 	int c;
+	int parity_done;
+	void *va[16];
+	void **array;
+	int j, nvects;
+
+	parity_done = 0;
+	while (zfs_xorp_hook && !parity_done) {
+		unsigned long no_accel = 0;
+		/* at least two columns (plus one for result) */
+		if (rm->rm_cols < 3) {
+			DTRACE_PROBE1(raidz_few_cols, int, rm->rm_cols);
+			break;
+		}
+		/* check sizes and alignment */
+		no_accel = UNALIGNED(rm->rm_col[VDEV_RAIDZ_P].rc_data);
+		if (no_accel) {
+			DTRACE_PROBE1(raidz_unaligned_dst, unsigned long,
+			    no_accel);
+			break;
+		}
+		pcount = rm->rm_col[rm->rm_firstdatacol].rc_size;
+		nvects = 1; /* for the destination */
+		for (c = rm->rm_firstdatacol; c < rm->rm_cols; c++) {
+			no_accel = UNALIGNED(rm->rm_col[c].rc_data);
+			if (no_accel) {
+				DTRACE_PROBE1(raidz_unaligned_src,
+				    unsigned long, no_accel);
+				break;
+			}
+			if (rm->rm_col[c].rc_size != pcount) {
+				DTRACE_PROBE(raidz_sizes_vary);
+				no_accel = 1;
+				break;
+			}
+			nvects++;
+		}
+		if (no_accel)
+			break;
+		if (nvects > 16) {
+			array = kmem_alloc(nvects * sizeof (void *),
+			    KM_NOSLEEP);
+			if (array == NULL) {
+				DTRACE_PROBE(raidz_alloc_failed);
+				break;
+			}
+		} else {
+			array = va;
+		}
+		for (j = 0, c = rm->rm_firstdatacol; c < rm->rm_cols;
+		    c++, j++) {
+			array[j] = rm->rm_col[c].rc_data;
+		}
+		array[j] = rm->rm_col[VDEV_RAIDZ_P].rc_data;
+		if (zfs_xorp_hook(nvects,
+		    rm->rm_col[rm->rm_firstdatacol].rc_size, array)) {
+			DTRACE_PROBE(raidz_accel_failure);
+			break;
+		}
+		if (array != va) {
+			kmem_free(array, nvects * sizeof (void *));
+		}
+		parity_done = 1;
+		DTRACE_PROBE(raidz_accel_success);
+	}
+	if (parity_done)
+		return;
 
 	pcount = rm->rm_col[VDEV_RAIDZ_P].rc_size / sizeof (src[0]);
 
@@ -1838,7 +1923,7 @@ raidz_checksum_verify(zio_t *zio)
 	zio_bad_cksum_t zbc;
 	raidz_map_t *rm = zio->io_vsd;
 
-	int ret = zio_checksum_error(zio, &zbc);
+	int ret = zio_checksum_error(zio, &zbc, NULL);
 	if (ret != 0 && zbc.zbc_injected != 0)
 		rm->rm_ecksuminjected = 1;
 

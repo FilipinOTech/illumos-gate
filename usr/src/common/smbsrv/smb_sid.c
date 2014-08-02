@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef _KERNEL
@@ -27,7 +28,6 @@
 #include <strings.h>
 #include <stdlib.h>
 #include <syslog.h>
-#include <smbsrv/libsmb.h>
 #else /* _KERNEL */
 #include <sys/types.h>
 #include <sys/sunddi.h>
@@ -255,25 +255,6 @@ smb_sid_indomain(smb_sid_t *domain_sid, smb_sid_t *sid)
 	return (B_TRUE);
 }
 
-#ifndef _KERNEL
-/*
- * smb_sid_islocal
- *
- * Check a SID to see if it belongs to the local domain.
- */
-boolean_t
-smb_sid_islocal(smb_sid_t *sid)
-{
-	smb_domain_t di;
-	boolean_t islocal = B_FALSE;
-
-	if (smb_domain_lookup_type(SMB_DOMAIN_LOCAL, &di))
-		islocal = smb_sid_indomain(di.di_binsid, sid);
-
-	return (islocal);
-}
-#endif /* _KERNEL */
-
 /*
  * smb_sid_tostr
  *
@@ -468,20 +449,3 @@ smb_sid_free(smb_sid_t *sid)
 	free(sid);
 #endif
 }
-
-#ifndef _KERNEL
-void
-smb_ids_free(smb_ids_t *ids)
-{
-	smb_id_t *id;
-	int i;
-
-	if ((ids != NULL) && (ids->i_ids != NULL)) {
-		id = ids->i_ids;
-		for (i = 0; i < ids->i_cnt; i++, id++)
-			smb_sid_free(id->i_sid);
-
-		free(ids->i_ids);
-	}
-}
-#endif

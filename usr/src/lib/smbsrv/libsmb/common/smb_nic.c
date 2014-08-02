@@ -21,6 +21,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <stdio.h>
@@ -41,6 +43,7 @@
 #include <netdb.h>
 #include <net/route.h>
 #include <arpa/inet.h>
+#include <sqlite/sqlite.h>
 
 #include <sys/socket.h>
 #include <sys/sockio.h>

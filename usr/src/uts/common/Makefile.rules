@@ -21,8 +21,8 @@
 
 #
 # Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2012 Nexenta Systems, Inc. All rights reserved.
 # Copyright 2013 Garrett D'Amore <garrett@damore.org>
+# Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
 #
 
 #
@@ -1089,6 +1089,10 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/fibre-channel/fca/oce/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/aoe/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/fibre-channel/fca/fcoei/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
@@ -1425,11 +1429,19 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/yge/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/skd/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/virtio/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/vioblk/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/vioif/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
@@ -2342,6 +2354,9 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/fibre-channel/fca/emlxs/%.c
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/fibre-channel/fca/oce/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/aoe/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/fibre-channel/fca/fcoei/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
@@ -2678,6 +2693,9 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/virtio/%.c
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/vioblk/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/vioif/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
 ZMODLINTFLAGS = -erroff=E_CONSTANT_CONDITION
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/zmod/%.c
@@ -2701,6 +2719,9 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/vr/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/yge/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/skd/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(COMMONBASE)/fsreparse/%.c

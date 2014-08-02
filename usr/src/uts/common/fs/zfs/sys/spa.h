@@ -20,8 +20,8 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef _SYS_SPA_H
@@ -455,6 +455,10 @@ _NOTE(CONSTCOND) } while (0)
 #define	BP_IS_RAIDZ(bp)		(DVA_GET_ASIZE(&(bp)->blk_dva[0]) > \
 				BP_GET_PSIZE(bp))
 
+/* Determines whether BP points to data or metadata blocks */
+#define	BP_IS_METADATA(bp)	(BP_GET_LEVEL(bp) > 0 || \
+				dmu_ot[BP_GET_TYPE(bp)].ot_metadata)
+
 #define	BP_ZERO(bp)				\
 {						\
 	(bp)->blk_dva[0].dva_word[0] = 0;	\
@@ -572,8 +576,8 @@ typedef enum spa_import_type {
 extern int spa_open(const char *pool, spa_t **, void *tag);
 extern int spa_open_rewind(const char *pool, spa_t **, void *tag,
     nvlist_t *policy, nvlist_t **config);
-extern int spa_get_stats(const char *pool, nvlist_t **config, char *altroot,
-    size_t buflen);
+extern int spa_get_stats(const char *name, nvlist_t **config,
+    char *altroot, size_t buflen);
 extern int spa_create(const char *pool, nvlist_t *config, nvlist_t *props,
     nvlist_t *zplprops);
 extern int spa_import_rootpool(char *devpath, char *devid);
@@ -582,7 +586,7 @@ extern int spa_import(const char *pool, nvlist_t *config, nvlist_t *props,
 extern nvlist_t *spa_tryimport(nvlist_t *tryconfig);
 extern int spa_destroy(char *pool);
 extern int spa_export(char *pool, nvlist_t **oldconfig, boolean_t force,
-    boolean_t hardforce);
+    boolean_t hardforce, boolean_t saveconfig);
 extern int spa_reset(char *pool);
 extern void spa_async_request(spa_t *spa, int flag);
 extern void spa_async_unrequest(spa_t *spa, int flag);
@@ -620,6 +624,13 @@ extern int spa_vdev_setpath(spa_t *spa, uint64_t guid, const char *newpath);
 extern int spa_vdev_setfru(spa_t *spa, uint64_t guid, const char *newfru);
 extern int spa_vdev_split_mirror(spa_t *spa, char *newname, nvlist_t *config,
     nvlist_t *props, boolean_t exp);
+
+extern int spa_load_vdev_props(spa_t *spa, boolean_t load_aux);
+
+extern int spa_vdev_prop_validate(spa_t *spa, nvlist_t *nvp);
+extern int spa_vdev_prop_set(spa_t *spa, uint64_t vdev_guid, nvlist_t *nvp);
+extern int spa_vdev_prop_get(spa_t *spa, uint64_t vdev_guid, nvlist_t **nvp);
+extern int spa_vdev_props_sync_task_do(spa_t *spa);
 
 /* spare state (which is global across all pools) */
 extern void spa_spare_add(vdev_t *vd);
@@ -741,10 +752,12 @@ extern uint64_t spa_get_asize(spa_t *spa, uint64_t lsize);
 extern uint64_t spa_get_dspace(spa_t *spa);
 extern uint64_t spa_get_slop_space(spa_t *spa);
 extern void spa_update_dspace(spa_t *spa);
+extern void spa_update_latency(spa_t *spa);
 extern uint64_t spa_version(spa_t *spa);
 extern boolean_t spa_deflate(spa_t *spa);
 extern metaslab_class_t *spa_normal_class(spa_t *spa);
 extern metaslab_class_t *spa_log_class(spa_t *spa);
+extern metaslab_class_t *spa_special_class(spa_t *spa);
 extern int spa_max_replication(spa_t *spa);
 extern int spa_prev_software_version(spa_t *spa);
 extern int spa_busy(void);
@@ -781,9 +794,17 @@ extern boolean_t spa_has_slogs(spa_t *spa);
 extern boolean_t spa_is_root(spa_t *spa);
 extern boolean_t spa_writeable(spa_t *spa);
 extern boolean_t spa_has_pending_synctask(spa_t *spa);
+extern boolean_t spa_has_special(spa_t *spa);
 
 extern int spa_mode(spa_t *spa);
 extern uint64_t strtonum(const char *str, char **nptr);
+
+/* Selector for dynamic I/O balancing between special and regular vdevs */
+extern boolean_t spa_use_special_class(spa_t *spa);
+
+/* Pool perfmon thread management */
+extern void spa_start_perfmon_thread(spa_t *spa);
+extern boolean_t spa_stop_perfmon_thread(spa_t *spa);
 
 extern char *spa_his_ievent_table[];
 
