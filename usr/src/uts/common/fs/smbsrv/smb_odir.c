@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -723,13 +723,9 @@ smb_odir_read_streaminfo(smb_request_t *sr, smb_odir_t *od,
 		rc = smb_fsop_lookup(sr, od->d_cred, 0, od->d_tree->t_snode,
 		    od->d_dnode, odirent->od_name, &fnode);
 		if (rc == 0) {
-			/*
-			 * We just need the file sizes, and don't want
-			 * EACCES failures here, so use kcred and pass
-			 * NULL as the sr to skip sr->fid-ofile checks.
-			 */
 			attr.sa_mask = SMB_AT_SIZE | SMB_AT_ALLOCSZ;
-			rc = smb_node_getattr(NULL, fnode, kcr, NULL, &attr);
+			rc = smb_node_getattr(sr, fnode, od->d_cred,
+			    NULL, &attr);
 			smb_node_release(fnode);
 		}
 
@@ -1179,7 +1175,7 @@ smb_odir_single_fileinfo(smb_request_t *sr, smb_odir_t *od,
 
 	bzero(&attr, sizeof (attr));
 	attr.sa_mask = SMB_AT_ALL;
-	rc = smb_node_getattr(NULL, fnode, zone_kcred(), NULL, &attr);
+	rc = smb_node_getattr(sr, fnode, kcred, NULL, &attr);
 	if (rc != 0) {
 		smb_node_release(fnode);
 		return (rc);
@@ -1192,7 +1188,7 @@ smb_odir_single_fileinfo(smb_request_t *sr, smb_odir_t *od,
 		smb_node_release(fnode);
 		fnode = tgt_node;
 		attr.sa_mask = SMB_AT_ALL;
-		rc = smb_node_getattr(NULL, fnode, zone_kcred(), NULL, &attr);
+		rc = smb_node_getattr(sr, fnode, kcred, NULL, &attr);
 		if (rc != 0) {
 			smb_node_release(fnode);
 			return (rc);
@@ -1294,7 +1290,7 @@ smb_odir_wildcard_fileinfo(smb_request_t *sr, smb_odir_t *od,
 
 	bzero(&attr, sizeof (attr));
 	attr.sa_mask = SMB_AT_ALL;
-	rc = smb_node_getattr(NULL, fnode, zone_kcred(), NULL, &attr);
+	rc = smb_node_getattr(sr, fnode, kcred, NULL, &attr);
 	if (rc != 0) {
 		smb_node_release(fnode);
 		return (rc);

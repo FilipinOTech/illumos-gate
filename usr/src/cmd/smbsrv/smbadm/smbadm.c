@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -231,12 +231,12 @@ smbadm_cmdusage(FILE *fp, smbadm_cmdinfo_t *cmd)
 
 	case HELP_JOIN:
 #if 0	/* Don't document "-p" yet, still needs work (NX 11960) */
-		(void) fprintf(fp, gettext("\t%s [-y] -p domain\n"
-		    "\t%s [-y] -u username domain\n\t%s [-y] -w workgroup\n"),
+		(void) fprintf(fp, gettext("\t%s -p domain\n"
+		    "\t%s -u username domain\n\t%s -w workgroup\n"),
 		    cmd->name, cmd->name, cmd->name);
 #else
-		(void) fprintf(fp, gettext("\t%s [-y] -u username domain\n"
-		    "\t%s [-y] -w workgroup\n"), cmd->name, cmd->name);
+		(void) fprintf(fp, gettext("\t%s -u username domain\n"
+		    "\t%s -w workgroup\n"), cmd->name, cmd->name);
 #endif
 		return;
 
@@ -465,7 +465,7 @@ smbadm_join(int argc, char **argv)
 	boolean_t do_prompt = B_TRUE;
 	char option;
 
-	while ((option = getopt(argc, argv, "pu:wy")) != -1) {
+	while ((option = getopt(argc, argv, "pu:w")) != -1) {
 		if (mode != 0) {
 			(void) fprintf(stderr, gettext(
 			    "join options are mutually exclusive\n"));
@@ -484,10 +484,6 @@ smbadm_join(int argc, char **argv)
 
 		case 'w':
 			mode = SMB_SECMODE_WORKGRP;
-			break;
-
-		case 'y':
-			do_prompt = B_FALSE;
 			break;
 
 		default:
@@ -515,9 +511,9 @@ smbadm_join(int argc, char **argv)
 	}
 
 	if (mode == SMB_SECMODE_WORKGRP) {
-		return (smbadm_join_workgroup(domain, do_prompt));
+		return (smbadm_join_workgroup(domain));
 	}
-	return (smbadm_join_domain(domain, username, do_prompt));
+	return (smbadm_join_domain(domain, username));
 }
 
 /*
@@ -618,9 +614,9 @@ smbadm_join_domain(const char *domain, const char *username, boolean_t prompt)
 		}
 
 		if (*jdi.domain_passwd == '\0') {
-			passwd_prompt = gettext("Enter domain password: ");
+			prompt = gettext("Enter domain password: ");
 
-			if ((p = getpassphrase(passwd_prompt)) == NULL) {
+			if ((p = getpassphrase(prompt)) == NULL) {
 				(void) fprintf(stderr, gettext(
 				    "missing password\n"));
 				smbadm_usage(B_FALSE);
@@ -674,6 +670,19 @@ smbadm_join_domain(const char *domain, const char *username, boolean_t prompt)
 		(void) fprintf(stderr,
 		    gettext("failed connecting to domain controller\n"));
 		goto common;
+
+	case NT_STATUS_BAD_NETWORK_PATH:
+		(void) fprintf(stderr,
+		    gettext("failed to resolve domain controller name\n"));
+		bzero(&jdi, sizeof (jdi));
+		return (1);
+
+	case NT_STATUS_NETWORK_ACCESS_DENIED:
+	case NT_STATUS_BAD_NETWORK_NAME:
+		(void) fprintf(stderr,
+		    gettext("failed connecting to domain controller\n"));
+		bzero(&jdi, sizeof (jdi));
+		return (1);
 
 	default:
 		(void) fprintf(stderr, gettext("failed to join %s: %s\n"),

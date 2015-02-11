@@ -913,9 +913,6 @@ smb_trans_net_share_enum(struct smb_request *sr, struct smb_xa *xa)
 		tot_packet_bytes = param_pad + param_scnt + data_pad +
 		    data_scnt;
 
-		pid_hi = sr->smb_pid >> 16;
-		pid_lo = (uint16_t)sr->smb_pid;
-
 		MBC_FLUSH(&reply);
 		(void) smb_mbc_encodef(&reply, SMB_HEADER_ED_FMT,
 		    sr->first_smb_com,
@@ -1453,8 +1450,9 @@ smb_trans_dispatch(smb_request_t *sr, smb_xa_t *xa)
 	uint16_t	devstate;
 	char		*req_fmt;
 	char		*rep_fmt;
+	smb_vdb_t	vdb;
 
-	if (xa->smb_suwcnt > 0) {
+	if (xa->smb_suwcnt > 0 && STYPE_ISIPC(sr->tid_tree->t_res_type)) {
 		rc = smb_mbc_decodef(&xa->req_setup_mb, "ww", &opcode,
 		    &sr->smb_fid);
 		if (rc != 0)

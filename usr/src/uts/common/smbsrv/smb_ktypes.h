@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -907,6 +907,7 @@ typedef struct smb_session {
 	uint32_t		sesskey;
 	uint32_t		challenge_len;
 	unsigned char		challenge_key[SMB_CHALLENGE_SZ];
+	unsigned char		MAC_key[44];
 	int64_t			activity_timestamp;
 	/*
 	 * Maximum negotiated buffer size between SMB client and server
@@ -1110,86 +1111,6 @@ typedef struct smb_tree {
 #define	SMB_PATHFILE_IS_READONLY(sr, node)			\
 	(SMB_TREE_IS_READONLY((sr)) ||				\
 	smb_node_file_is_readonly((node)))
-
-#define	SMB_ODIR_MAGIC 		0x4F444952	/* 'ODIR' */
-#define	SMB_ODIR_VALID(p)	\
-    ASSERT((p != NULL) && ((p)->d_magic == SMB_ODIR_MAGIC))
-
-#define	SMB_ODIR_BUFSIZE	(8 * 1024)
-
-#define	SMB_ODIR_FLAG_WILDCARDS		0x0001
-#define	SMB_ODIR_FLAG_IGNORE_CASE	0x0002
-#define	SMB_ODIR_FLAG_XATTR		0x0004
-#define	SMB_ODIR_FLAG_EDIRENT		0x0008
-#define	SMB_ODIR_FLAG_CATIA		0x0010
-#define	SMB_ODIR_FLAG_ABE		0x0020
-#define	SMB_ODIR_FLAG_SHORTNAMES	0x0040
-
-typedef enum {
-	SMB_ODIR_STATE_OPEN = 0,
-	SMB_ODIR_STATE_IN_USE,
-	SMB_ODIR_STATE_CLOSING,
-	SMB_ODIR_STATE_CLOSED,
-	SMB_ODIR_STATE_SENTINEL
-} smb_odir_state_t;
-
-typedef enum {
-	SMB_ODIR_RESUME_CONT,
-	SMB_ODIR_RESUME_IDX,
-	SMB_ODIR_RESUME_COOKIE,
-	SMB_ODIR_RESUME_FNAME
-} smb_odir_resume_type_t;
-
-typedef struct smb_odir_resume {
-	smb_odir_resume_type_t	or_type;
-	int			or_idx;
-	uint32_t		or_cookie;
-	char			*or_fname;
-} smb_odir_resume_t;
-
-/*
- * Flags used when opening an odir
- */
-#define	SMB_ODIR_OPENF_BACKUP_INTENT	0x01
-
-typedef struct smb_odir {
-	list_node_t		d_lnd;
-	uint32_t		d_magic;
-	kmutex_t		d_mutex;
-	smb_odir_state_t	d_state;
-	smb_session_t		*d_session;
-	smb_user_t		*d_user;
-	smb_tree_t		*d_tree;
-	smb_node_t		*d_dnode;
-	cred_t			*d_cred;
-	uint32_t		d_opened_by_pid;
-	uint16_t		d_odid;
-	uint16_t		d_sattr;
-	uint32_t		d_refcnt;
-	uint32_t		d_flags;
-	boolean_t		d_eof;
-	int			d_bufsize;
-	uint64_t		d_offset;
-	union {
-		char		*u_bufptr;
-		struct edirent	*u_edp;
-		struct dirent64	*u_dp;
-	} d_u;
-	uint32_t		d_last_cookie;
-	uint32_t		d_cookies[SMB_MAX_SEARCH];
-	char			d_pattern[MAXNAMELEN];
-	char			d_buf[SMB_ODIR_BUFSIZE];
-	char			d_last_name[MAXNAMELEN];
-} smb_odir_t;
-#define	d_bufptr	d_u.u_bufptr
-#define	d_edp		d_u.u_edp
-#define	d_dp		d_u.u_dp
-
-typedef struct smb_odirent {
-	char		od_name[MAXNAMELEN];	/* on disk name */
-	ino64_t		od_ino;
-	uint32_t	od_eflags;
-} smb_odirent_t;
 
 #define	SMB_OPIPE_MAGIC		0x50495045	/* 'PIPE' */
 #define	SMB_OPIPE_VALID(p)	\
@@ -1727,7 +1648,6 @@ typedef struct smb_request {
 		smb_arg_dirop_t		dirop;
 		smb_arg_open_t		open;
 		smb_rw_param_t		*rw;
-		smb_oplock_grant_t	olbrk;	/* for async oplock break */
 		int32_t			timestamp;
 	} arg;
 } smb_request_t;

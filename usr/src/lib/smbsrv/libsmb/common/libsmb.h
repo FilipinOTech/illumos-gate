@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef	_LIBSMB_H
@@ -195,7 +195,6 @@ extern int smb_config_setnum(smb_cfg_id_t, int64_t);
 extern int smb_config_setbool(smb_cfg_id_t, boolean_t);
 
 extern boolean_t smb_config_get_ads_enable(void);
-extern int smb_config_get_debug(void);
 extern uint8_t smb_config_get_fg_flag(void);
 extern char *smb_config_get_localsid(void);
 extern int smb_config_get_localuuid(uuid_t);
@@ -516,6 +515,8 @@ extern int smb_auth_ntlmv2_hash(unsigned char *,
 
 boolean_t smb_auth_validate(smb_passwd_t *, char *, char *,
     uchar_t *, uint_t, uchar_t *, uint_t, uchar_t *, uint_t, uchar_t *);
+
+int smb_gen_random_passwd(char *passwd, size_t bufsz);
 
 int smb_gen_random_passwd(char *passwd, size_t bufsz);
 

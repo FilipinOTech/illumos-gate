@@ -1464,3 +1464,17 @@ smb_session_genkey(smb_session_t *session)
 	session->sesskey = tmp_key[0] | tmp_key[1] << 8 |
 	    tmp_key[2] << 16 | tmp_key[3] << 24;
 }
+
+static void
+smb_session_genkey(smb_session_t *session)
+{
+	uint8_t		tmp_key[SMB_CHALLENGE_SZ];
+
+	(void) random_get_pseudo_bytes(tmp_key, SMB_CHALLENGE_SZ);
+	bcopy(tmp_key, &session->challenge_key, SMB_CHALLENGE_SZ);
+	session->challenge_len = SMB_CHALLENGE_SZ;
+
+	(void) random_get_pseudo_bytes(tmp_key, 4);
+	session->sesskey = tmp_key[0] | tmp_key[1] << 8 |
+	    tmp_key[2] << 16 | tmp_key[3] << 24;
+}

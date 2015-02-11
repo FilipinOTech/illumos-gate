@@ -22,7 +22,7 @@
 .\" Copyright (C) 2008, Sun Microsystems, Inc. All Rights Reserved
 .\" Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
 .\"
-.Dd June 30, 2014
+.Dd November 10, 2014
 .Dt SHARE_NFS 1M
 .Os
 .Sh NAME
@@ -128,7 +128,7 @@ options (if specified) are evaluated before the
 .Sy gidmap Ns =
 option.  The
 .Sy gidmap Ns =
-option is skipped in the case when the client matches the
+option is skipped in the case where the client matches the
 .Sy root Ns =
 option.
 .Pp
@@ -140,33 +140,23 @@ option.
 .Pp
 This option is supported only for AUTH_SYS.
 .It Sy index Ns = Ns Ar file
-Load file rather than a listing of the directory containing this file when the
+Load
+.Ar file
+rather than a listing of the directory containing this file when the
 directory is referenced by an NFS URL.
-.It Sy log Ns = Ns Ar tag
+.It Sy log Ns Oo = Ns Ar tag Oc
 Enables NFS server logging for the specified file system. The optional
 .Ar tag
-determines the location of the related log files. The tag is defined in
+determines the location of the related log files. The
+.Ar tag
+is defined in
 .Pa /etc/nfs/nfslog.conf .
-If no tag is specified, the default values associated with the global tag in
+If no
+.Ar tag
+is specified, the default values associated with the global tag in
 .Pa /etc/nfs/nfslog.conf
 are used. Support of NFS server logging is only available for NFS Version 2 and
 Version 3 requests.
-.It Sy nohide
-By default, if server exports two filesystems, one of which is mounted as a
-child of the other, NFS Version 2 and Version 3 clients must mount both
-filesystems explicitly in order to access them. If a client only mounts the
-parent, it will see an empty directory at the location where the other
-filesystem is mounted.
-.Pp
-Setting the
-.Sy nohide
-option on a filesystem causes it to no longer be hidden in this manner, and the
-client will be able to move from the parent filesystem to this one without
-noticing the change. However, some NFS clients or applications may not function
-correctly when this option is used. In particular, files on different underlying
-filesystems may appear to have the same inode numbers. The
-.Sy nohide
-option only applies to NFS Version 2 and Version 3 requests.
 .It Sy none Ns = Ns Ar access_list
 Access is not allowed to any client that matches the access list. The exception
 is when the access list is an asterisk (*), in which case
@@ -243,7 +233,9 @@ suboption for the clients specified. See
 .Sx access_list
 below.
 .It Sy sec Ns = Ns Ar mode Ns Oo : Ns Ar mode Oc Ns ...
-Sharing uses one or more of the specified security modes. The mode in the
+Sharing uses one or more of the specified security modes. The
+.Ar mode
+in the
 .Sy sec Ns = Ns Ar mode
 option must be a mode name supported on the client. If the
 .Sy sec Ns =
@@ -258,9 +250,9 @@ Each
 option specifies modes that apply to any subsequent
 .Sy window Ns = ,
 .Sy rw ,
-.Sy ro,
-.Sy rw Ns =,
-.Sy ro Ns =
+.Sy ro ,
+.Sy rw Ns = ,
+.Sy ro Ns = ,
 and
 .Sy root Ns =
 options that are provided before another
@@ -273,7 +265,7 @@ resets the security mode context, so that more
 .Sy rw ,
 .Sy ro ,
 .Sy rw Ns = ,
-.Sy ro Ns =
+.Sy ro Ns = ,
 and
 .Sy root Ns =
 options can be supplied for additional modes.
@@ -327,7 +319,7 @@ options (if specified) are evaluated before the
 .Sy uidmap Ns =
 option.  The
 .Sy uidmap Ns =
-option is skipped in the case when the client matches the
+option is skipped in the case where the client matches the
 .Sy root Ns =
 option.
 .Pp
@@ -444,11 +436,10 @@ Multiple, individual IP addresses would be specified, for example, as:
 .Bd -literal -offset indent
 root=@172.16.132.20:@172.16.134.20
 .Ed
+.El
 .Pp
 A prefixed minus sign (-) denies access to that component of
 .Ar access_list .
-.El
-.Pp
 The list is searched sequentially until a match is found that either grants or
 denies access, or until the end of the list is reached. For example, if host
 .Qq terra
@@ -538,7 +529,7 @@ option is presented at least once, all uses of the
 .Sy rw ,
 .Sy ro ,
 .Sy rw Ns = ,
-.Sy ro Ns =
+.Sy ro Ns = ,
 and
 .Sy root Ns =
 options must come after the first
@@ -568,12 +559,12 @@ share -F nfs -o sec=dh /var
 grants no access to clients that use AUTH_SYS.
 .Pp
 Unlike previous implementations of
-.Nm
+.Nm ,
 access checking for the
 .Sy window Ns = ,
 .Sy rw ,
 .Sy ro ,
-.Sy rw Ns =
+.Sy rw Ns = ,
 and
 .Sy ro Ns =
 options is done per NFS request, instead of per mount request.
@@ -662,7 +653,7 @@ There are no interactions between the
 option and the
 .Sy rw ,
 .Sy ro ,
-.Sy rw Ns =
+.Sy rw Ns = ,
 and
 .Sy ro Ns =
 options. Putting a host in the root list does not override the semantics of the
@@ -722,7 +713,7 @@ file system unless there is at least one file system entry in the
 file. The
 .Xr mountd 1M
 and
-nfsd 1M
+.Xr nfsd 1M
 daemons only run if there is a file system entry in
 .Pa /etc/dfs/dfstab
 when starting or rebooting the system.
@@ -747,14 +738,3 @@ use of
 does not work as it does with NFS Version 2 and Version 3 and the client
 receives an error when attempting to mount
 .Pa /export/foo .
-.Pp
-The
-.Sy nohide
-option violates RFC 1094,
-.%T "Network File System Protocol Specification"
-and RFC 1813,
-.%T "NFS: Network File System Version 3 Protocol Specification"
-.Pp
-The
-.Sy nohide
-option is provided for compatibility with Linux NFS.

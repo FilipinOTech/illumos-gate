@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -235,7 +235,6 @@ smb_com_nt_create_andx(struct smb_request *sr)
 	smb_ofile_t		*of;
 	int			rc;
 	unsigned char		DirFlag;
-	uint32_t		status;
 
 	if ((op->create_options & FILE_DELETE_ON_CLOSE) &&
 	    !(op->desired_access & DELETE)) {
@@ -281,6 +280,13 @@ smb_com_nt_create_andx(struct smb_request *sr)
 		smbsr_status(sr, status, 0, 0);
 		return (SDRC_ERROR);
 	}
+
+	/*
+	 * NB: after the above smb_common_open() success,
+	 * we have a handle allocated (sr->fid_ofile).
+	 * If we don't return success, we must close it.
+	 */
+	of = sr->fid_ofile;
 
 	/*
 	 * NB: after the above smb_common_open() success,

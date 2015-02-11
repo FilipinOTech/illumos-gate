@@ -13,7 +13,7 @@
 # CDDL HEADER END
 #
 #
-# Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+# Copyright 2014 Nexenta Systems, Inc. All rights reserved.
 #
 # uts/intel/skd/Makefile
 #
@@ -41,11 +41,6 @@ CONF_SRCDIR	= $(UTSBASE)/common/io/skd
 #	Include common rules.
 #
 include $(UTSBASE)/intel/Makefile.intel
-
-# If we need any, place GCC warning suppression here. 
-#CERRWARN	+= -_gcc=-Wno-parentheses
-#CERRWARN	+= -_gcc=-Wno-switch
-#CERRWARN	+= -_gcc=-Wno-uninitialized
 
 #
 #	Define targets

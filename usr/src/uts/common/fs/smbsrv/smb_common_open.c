@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -444,7 +444,7 @@ smb_open_subr(smb_request_t *sr)
 		 * check the search attributes (sattr).
 		 */
 		op->fqi.fq_fattr.sa_mask = SMB_AT_DOSATTR;
-		rc = smb_node_getattr(sr, op->fqi.fq_fnode, zone_kcred(),
+		rc = smb_node_getattr(sr, op->fqi.fq_fnode, kcred,
 		    NULL, &op->fqi.fq_fattr);
 		if (rc != 0) {
 			smb_node_release(op->fqi.fq_fnode);
@@ -799,7 +799,8 @@ smb_open_subr(smb_request_t *sr)
 	 */
 	if (status == NT_STATUS_SUCCESS) {
 		if ((rc = smb_set_open_attributes(sr, of)) != 0) {
-			status = smb_errno2status(rc);
+			smbsr_errno(sr, rc);
+			status = sr->smb_error.status;
 		}
 	}
 
@@ -811,9 +812,11 @@ smb_open_subr(smb_request_t *sr)
 		 * so pass kcred here.
 		 */
 		op->fqi.fq_fattr.sa_mask = SMB_AT_ALL;
-		rc = smb_node_getattr(sr, node, zone_kcred(), of,
+		rc = smb_node_getattr(sr, node, kcred, of,
 		    &op->fqi.fq_fattr);
 		if (rc != 0) {
+			smbsr_error(sr, NT_STATUS_INTERNAL_ERROR,
+			    ERRDOS, ERROR_INTERNAL_ERROR);
 			status = NT_STATUS_INTERNAL_ERROR;
 		}
 	}

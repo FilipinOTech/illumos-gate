@@ -759,7 +759,7 @@ vdev_disk_ioctl_done(void *zio_arg, int error)
 	zio_interrupt(zio);
 }
 
-static int
+static void
 vdev_disk_io_start(zio_t *zio)
 {
 	vdev_t *vd = zio->io_vd;
@@ -782,16 +782,16 @@ vdev_disk_io_start(zio_t *zio)
 	}
 	if (dvd->vd_lh == NULL) {
 		zio->io_error = ENXIO;
-		rw_exit(&vd->vdev_tsd_lock);
-		return (ZIO_PIPELINE_CONTINUE);
+		zio_interrupt(zio);
+		return;
 	}
 
 	if (zio->io_type == ZIO_TYPE_IOCTL) {
 		/* XXPOLICY */
 		if (!vdev_readable(vd)) {
 			zio->io_error = SET_ERROR(ENXIO);
-			rw_exit(&vd->vdev_tsd_lock);
-			return (ZIO_PIPELINE_CONTINUE);
+			zio_interrupt(zio);
+			return;
 		}
 
 		switch (zio->io_cmd) {
@@ -822,8 +822,7 @@ vdev_disk_io_start(zio_t *zio)
 				 * and will call vdev_disk_ioctl_done()
 				 * upon completion.
 				 */
-				rw_exit(&vd->vdev_tsd_lock);
-				return (ZIO_PIPELINE_STOP);
+				return;
 			}
 
 			if (error == ENOTSUP || error == ENOTTY) {
@@ -844,8 +843,8 @@ vdev_disk_io_start(zio_t *zio)
 			zio->io_error = SET_ERROR(ENOTSUP);
 		}
 
-		rw_exit(&vd->vdev_tsd_lock);
-		return (ZIO_PIPELINE_CONTINUE);
+		zio_execute(zio);
+		return;
 	}
 
 	vb = kmem_alloc(sizeof (vdev_buf_t), KM_SLEEP);
@@ -866,9 +865,6 @@ vdev_disk_io_start(zio_t *zio)
 
 	/* ldi_strategy() will return non-zero only on programming errors */
 	VERIFY(ldi_strategy(dvd->vd_lh, bp) == 0);
-	rw_exit(&vd->vdev_tsd_lock);
-
-	return (ZIO_PIPELINE_STOP);
 }
 
 static void

@@ -9,14 +9,13 @@
 .\" http://www.illumos.org/license/CDDL.
 .\"
 .\"
-.\" Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+.\" Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
 .\"
 
 .TH SKD 7D "August 10, 2013"
 .SH NAME
 skd \- sTec S112x PCIe Solid-State Disk driver
 .SH DESCRIPTION
-.sp
 .LP
 The \fBskd\fR driver uses the \fBblkdev\fR framework to provide a solid-state
 disk in \fB/dev/dsk/cNt0d0*\fR from the sTec S112x series of PCIe cards.

@@ -568,7 +568,7 @@ ntlmssp_put_type3(struct ssp_ctx *sp, struct mbdata *out_mb)
 	 * Compute the MIC and stuff that in...
 	 * The MIC is apparently optional.
 	 */
-	(void)pmic;
+	(void) pmic;
 
 out:
 	mb_done(&mb2);

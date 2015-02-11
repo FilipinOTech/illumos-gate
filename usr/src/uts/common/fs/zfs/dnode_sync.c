@@ -22,7 +22,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
- * Copyright (c) 2014 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -77,7 +77,8 @@ dnode_increase_indirection(dnode_t *dn, dmu_tx_t *tx)
 
 	/* set dbuf's parent pointers to new indirect buf */
 	for (i = 0; i < nblkptr; i++) {
-		dmu_buf_impl_t *child = dbuf_find(dn, old_toplvl, i);
+		dmu_buf_impl_t *child =
+		    dbuf_find(dn->dn_objset, dn->dn_object, old_toplvl, i);
 
 		if (child == NULL)
 			continue;
@@ -397,53 +398,37 @@ dnode_sync_free_range(void *arg, uint64_t blkid, uint64_t nblks)
 void
 dnode_evict_dbufs(dnode_t *dn, int level)
 {
-	int progress;
-	int pass = 0;
+	dmu_buf_impl_t db_marker;
+	dmu_buf_impl_t *db, *db_next;
 
-	do {
-		dmu_buf_impl_t *db, *db_next;
-		int evicting = FALSE;
+	mutex_enter(&dn->dn_dbufs_mtx);
+	for (db = avl_first(&dn->dn_dbufs); db != NULL; db = db_next) {
 
-		progress = FALSE;
-		mutex_enter(&dn->dn_dbufs_mtx);
-		for (db = avl_first(&dn->dn_dbufs); db != NULL; db = db_next) {
-			db_next = AVL_NEXT(&dn->dn_dbufs, db);
 #ifdef	DEBUG
-			DB_DNODE_ENTER(db);
-			ASSERT3P(DB_DNODE(db), ==, dn);
-			DB_DNODE_EXIT(db);
+		DB_DNODE_ENTER(db);
+		ASSERT3P(DB_DNODE(db), ==, dn);
+		DB_DNODE_EXIT(db);
 #endif	/* DEBUG */
 
-			mutex_enter(&db->db_mtx);
-			if (level != DBUF_EVICT_ALL && db->db_level != level) {
-				mutex_exit(&db->db_mtx);
-				continue;
-			}	
-			if (db->db_state == DB_EVICTING) {
-				progress = TRUE;
-				evicting = TRUE;
-				mutex_exit(&db->db_mtx);
-			} else if (refcount_is_zero(&db->db_holds)) {
-				progress = TRUE;
-				dbuf_clear(db); /* exits db_mtx for us */
-			} else {
-				mutex_exit(&db->db_mtx);
-			}
+		mutex_enter(&db->db_mtx);
+		if (db->db_state != DB_EVICTING &&
+		    refcount_is_zero(&db->db_holds)) {
+			db_marker.db_level = db->db_level;
+			db_marker.db_blkid = db->db_blkid;
+			db_marker.db_state = DB_SEARCH;
+			avl_insert_here(&dn->dn_dbufs, &db_marker, db,
+			    AVL_BEFORE);
 
+			dbuf_clear(db);
+
+			db_next = AVL_NEXT(&dn->dn_dbufs, &db_marker);
+			avl_remove(&dn->dn_dbufs, &db_marker);
+		} else {
+			mutex_exit(&db->db_mtx);
+			db_next = AVL_NEXT(&dn->dn_dbufs, db);
 		}
-		/*
-		 * NB: we need to drop dn_dbufs_mtx between passes so
-		 * that any DB_EVICTING dbufs can make progress.
-		 * Ideally, we would have some cv we could wait on, but
-		 * since we don't, just wait a bit to give the other
-		 * thread a chance to run.
-		 */
-		mutex_exit(&dn->dn_dbufs_mtx);
-		if (evicting)
-			delay(1);
-		pass++;
-		ASSERT(pass < 100); /* sanity check */
-	} while (progress);
+	}
+	mutex_exit(&dn->dn_dbufs_mtx);
 
 	rw_enter(&dn->dn_struct_rwlock, RW_WRITER);
 	if (dn->dn_bonus && refcount_is_zero(&dn->dn_bonus->db_holds)) {
@@ -502,7 +487,6 @@ dnode_sync_free(dnode_t *dn, dmu_tx_t *tx)
 	dnode_undirty_dbufs(&dn->dn_dirty_records[txgoff]);
 	dnode_evict_dbufs(dn, DBUF_EVICT_ALL);
 	ASSERT(avl_is_empty(&dn->dn_dbufs));
-	ASSERT3P(dn->dn_bonus, ==, NULL);
 
 	/*
 	 * XXX - It would be nice to assert this, but we may still
@@ -638,12 +622,11 @@ dnode_sync(dnode_t *dn, dmu_tx_t *tx)
 	    dn->dn_free_txg <= tx->tx_txg;
 
 	/*
-	 * We will either remove a spill block when a file is being removed
-	 * or we have been asked to remove it.
+	 * Remove the spill block if we have been explicitly asked to
+	 * remove it, or if the object is being removed.
 	 */
-	if (dn->dn_rm_spillblk[txgoff] ||
-	    ((dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) && freeing_dnode)) {
-		if ((dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR))
+	if (dn->dn_rm_spillblk[txgoff] || freeing_dnode) {
+		if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR)
 			kill_spill = B_TRUE;
 		dn->dn_rm_spillblk[txgoff] = 0;
 	}
@@ -689,6 +672,11 @@ dnode_sync(dnode_t *dn, dmu_tx_t *tx)
 		return;
 	}
 
+	if (dn->dn_next_nlevels[txgoff]) {
+		dnode_increase_indirection(dn, tx);
+		dn->dn_next_nlevels[txgoff] = 0;
+	}
+
 	if (dn->dn_next_nblkptr[txgoff]) {
 		/* this should only happen on a realloc */
 		ASSERT(dn->dn_allocated_txg == tx->tx_txg);
@@ -711,11 +699,6 @@ dnode_sync(dnode_t *dn, dmu_tx_t *tx)
 		dnp->dn_nblkptr = dn->dn_next_nblkptr[txgoff];
 		dn->dn_next_nblkptr[txgoff] = 0;
 		mutex_exit(&dn->dn_mtx);
-	}
-
-	if (dn->dn_next_nlevels[txgoff]) {
-		dnode_increase_indirection(dn, tx);
-		dn->dn_next_nlevels[txgoff] = 0;
 	}
 
 	dbuf_sync_list(list, tx);

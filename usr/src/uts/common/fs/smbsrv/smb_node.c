@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 /*
  * SMB Node State Machine
@@ -637,7 +637,7 @@ smb_node_set_delete_on_close(smb_node_t *node, cred_t *cr, uint32_t flags)
 	smb_attr_t attr;
 
 	if (node->n_pending_dosattr & FILE_ATTRIBUTE_READONLY)
-		return (NT_STATUS_CANNOT_DELETE);
+		return (-1);
 
 	bzero(&attr, sizeof (smb_attr_t));
 	attr.sa_mask = SMB_AT_DOSATTR;
@@ -1461,12 +1461,10 @@ smb_node_setattr(smb_request_t *sr, smb_node_t *node,
 		 * Setting the allocation size but not EOF position.
 		 * Get the current EOF in tmp_attr and (if necessary)
 		 * truncate to the (rounded up) allocation size.
-		 * Using kcred here because if we don't have access,
-		 * we want to fail at setattr below and not here.
 		 */
 		bzero(&tmp_attr, sizeof (smb_attr_t));
 		tmp_attr.sa_mask = SMB_AT_SIZE;
-		rc = smb_fsop_getattr(NULL, zone_kcred(), node, &tmp_attr);
+		rc = smb_fsop_getattr(NULL, kcred, node, &tmp_attr);
 		if (rc != 0)
 			return (rc);
 		attr->sa_allocsz = SMB_ALLOCSZ(attr->sa_allocsz);
@@ -1714,10 +1712,6 @@ smb_node_getattr(smb_request_t *sr, smb_node_t *node, cred_t *cr,
 	return (0);
 }
 
-
-#ifndef	_KERNEL
-extern int reparse_vnode_parse(vnode_t *vp, nvlist_t *nvl); /* XXX */
-#endif	/* _KERNEL */
 
 /*
  * Check to see if the node represents a reparse point.

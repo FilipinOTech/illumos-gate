@@ -50,8 +50,8 @@ static cond_t smbd_dc_cv;
 static void *smbd_dc_monitor(void *);
 static void smbd_dc_update(void);
 /* Todo: static boolean_t smbd_set_netlogon_cred(void); */
-static void smbd_join_workgroup(smb_joininfo_t *, smb_joinres_t *);
-static void smbd_join_domain(smb_joininfo_t *, smb_joinres_t *);
+static uint32_t smbd_join_workgroup(smb_joininfo_t *);
+static uint32_t smbd_join_domain(smb_joininfo_t *);
 
 /*
  * Launch the DC discovery and monitor thread.
@@ -183,7 +183,7 @@ smbd_dc_update(void)
 	}
 
 	di = &info.d_primary;
-	smb_log(smbd.s_loghd, LOG_INFO,
+	smb_log(smbd.s_loghd, LOG_NOTICE,
 	    "smbd_dc_update: %s: located %s", domain, info.d_dc);
 
 	status = mlsvc_netlogon(info.d_dc, di->di_nbname);
@@ -220,11 +220,13 @@ smbd_join(smb_joininfo_t *info, smb_joinres_t *res)
 	if (info->mode == SMB_SECMODE_WORKGRP)
 		smbd_join_workgroup(info, res);
 	else
-		smbd_join_domain(info, res);
+		status = smbd_join_domain(info);
+
+	return (status);
 }
 
-static void
-smbd_join_workgroup(smb_joininfo_t *info, smb_joinres_t *res)
+static uint32_t
+smbd_join_workgroup(smb_joininfo_t *info)
 {
 	char nb_domain[SMB_PI_MAX_DOMAIN];
 
@@ -245,13 +247,61 @@ smbd_join_workgroup(smb_joininfo_t *info, smb_joinres_t *res)
 static void
 smbd_join_domain(smb_joininfo_t *info, smb_joinres_t *res)
 {
+	static unsigned char zero_hash[SMBAUTH_HASH_SZ];
+	smb_domainex_t dxi;
+	smb_domain_t *di;
+	uint32_t status;
+
+	/*
+	 * Ensure that any previous membership of this domain has
+	 * been cleared from the environment before we start. This
+	 * will ensure that we don't attempt a NETLOGON_SAMLOGON
+	 * when attempting to find the PDC.
+	 */
+	(void) smb_config_setbool(SMB_CI_DOMAIN_MEMB, B_FALSE);
+
+	/* Clear DNS local (ADS) lookup cache too. */
+	smb_ads_refresh();
+
+	/*
+	 * Use a NULL session while searching for a DC, and
+	 * while getting information about the domain.
+	 */
+	smb_ipc_set(MLSVC_ANON_USER, zero_hash);
+
+	if (!smb_locate_dc(info->domain_name, "", &dxi)) {
+		syslog(LOG_ERR, "smbd: failed locating "
+		    "domain controller for %s",
+		    info->domain_name);
+		status = NT_STATUS_DOMAIN_CONTROLLER_NOT_FOUND;
+		goto errout;
+	}
 
 	/* info->domain_name could either be NetBIOS domain name or FQDN */
-	mlsvc_join(info, res);
-	if (res->status == 0) {
-		smbd_set_secmode(SMB_SECMODE_DOMAIN);
-	} else {
+	status = mlsvc_join(&dxi, info->domain_username, info->domain_passwd);
+	if (status != NT_STATUS_SUCCESS) {
 		syslog(LOG_ERR, "smbd: failed joining %s (%s)",
-		    info->domain_name, xlate_nt_status(res->status));
+		    info->domain_name, xlate_nt_status(status));
+		goto errout;
 	}
+
+	/*
+	 * Success!
+	 *
+	 * Strange, mlsvc_join does some of the work to
+	 * save the config, then the rest happens here.
+	 * Todo: Do the config update all in one place.
+	 */
+	di = &dxi.d_primary;
+	smbd_set_secmode(SMB_SECMODE_DOMAIN);
+	smb_config_setdomaininfo(di->di_nbname, di->di_fqname,
+	    di->di_sid,
+	    di->di_u.di_dns.ddi_forest,
+	    di->di_u.di_dns.ddi_guid);
+	smb_ipc_commit();
+	return (status);
+
+errout:
+	smb_ipc_rollback();
+	return (status);
 }

@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/param.h>
@@ -1798,7 +1798,7 @@ smb_ads_lookup_computer_attr_kvno(smb_ads_handle_t *ah, char *dn)
  * That would be needed while acquiring Kerberos TGT ticket for the host
  * principal after the domain join operation.
  */
-smb_ads_status_t
+smb_adjoin_status_t
 smb_ads_join(char *domain, char *user, char *usr_passwd, char *machine_passwd)
 {
 	smb_ads_handle_t *ah = NULL;
@@ -1816,10 +1816,9 @@ smb_ads_join(char *domain, char *user, char *usr_passwd, char *machine_passwd)
 	smb_krb5_pn_set_t spns;
 	krb5_enctype *encptr;
 
-	rc = smb_ads_open_main(&ah, domain, user, usr_passwd);
-	if (rc != 0) {
+	if ((ah = smb_ads_open_main(domain, user, usr_passwd)) == NULL) {
 		smb_ccache_remove(SMB_CCACHE_PATH);
-		return (rc);
+		return (SMB_ADJOIN_ERR_GET_HANDLE);
 	}
 
 	if ((dclevel = smb_ads_get_dc_level(ah)) == -1) {

@@ -49,8 +49,7 @@ SRCS=   $(OBJS_COMMON:%.o=$(SRCDIR)/%.c)	\
 	$(OBJS_SHARED:%.o=$(SRC)/common/smbsrv/%.c)
 
 LDLIBS +=	$(MACH_LDLIBS)
-LDLIBS +=	-lsmb -lads -lgss -lcmdutils -lldap \
-		-lsocket -lnsl -lc
+LDLIBS +=	-lsmb -lgss -lcmdutils -lldap -lresolv -lnsl -lsocket -lc
 CPPFLAGS +=	-D_REENTRANT
 CPPFLAGS +=	-Dsyslog=smb_syslog
 CERRWARN +=	-_gcc=-Wno-unused-function

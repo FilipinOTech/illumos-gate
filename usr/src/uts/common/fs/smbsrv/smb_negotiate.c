@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -385,34 +385,16 @@ smb_com_negotiate(smb_request_t *sr)
 		return (SDRC_ERROR);
 	}
 
-	/*
-	 * Special case for negotiating SMB2 from SMB1.  The client
-	 * includes the  "SMB 2..." dialects in the SMB1 negotiate,
-	 * and if SMB2 is enabled, we choose one of those and then
-	 * send an SMB2 reply to that SMB1 request.  Yes, it's very
-	 * strange, but this SMB1 request can have an SMB2 reply!
-	 * To accomplish this, we let the SMB2 code send the reply
-	 * and return the special code SDRC_NO_REPLY to the SMB1
-	 * dispatch logic so it will NOT send an SMB1 reply.
-	 * (Or possibly send an SMB1 error reply.)
-	 */
-	if (negprot->ni_dialect >= DIALECT_SMB2002) {
-		rc = smb1_negotiate_smb2(sr);
-		ASSERT(rc == SDRC_NO_REPLY ||
-		    rc == SDRC_DROP_VC || rc == SDRC_ERROR);
-		return (rc);
-	}
-
-	session->secmode = NEGOTIATE_ENCRYPT_PASSWORDS |
-	    NEGOTIATE_USER_SECURITY;
-	secmode = session->secmode;
-	sesskey = session->sesskey;
+	sr->session->secmode = NEGOTIATE_SECURITY_CHALLENGE_RESPONSE |
+	    NEGOTIATE_SECURITY_USER_LEVEL;
+	secmode = sr->session->secmode;
+	sesskey = sr->session->sesskey;
 
 	(void) microtime(&negprot->ni_servertime);
 	negprot->ni_tzcorrection = sr->sr_gmtoff / 60;
 	negprot->ni_maxmpxcount = sr->sr_cfg->skc_maxworkers;
 	negprot->ni_keylen = SMB_CHALLENGE_SZ;
-	bcopy(&session->challenge_key, negprot->ni_key, SMB_CHALLENGE_SZ);
+	bcopy(&sr->session->challenge_key, negprot->ni_key, SMB_CHALLENGE_SZ);
 	nbdomain = sr->sr_cfg->skc_nbdomain;
 
 	/*
@@ -614,12 +596,6 @@ NT_LM_0_12_ext_sec:
 	 */
 	session->dialect = negprot->ni_dialect;
 	session->s_state = SMB_SESSION_STATE_NEGOTIATED;
-
-	/* Allow normal SMB1 requests now. */
-	session->newrq_func = smb1sr_newrq;
-
-	return (SDRC_SUCCESS);
-}
 
 static int
 smb_xlate_dialect(const char *dialect)

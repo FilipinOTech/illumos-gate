@@ -21,8 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- *
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <strings.h>
@@ -30,59 +29,7 @@
 #include <syslog.h>
 #include <smbsrv/string.h>
 #include <smbsrv/libsmb.h>
-#include <netsmb/spnego.h>	/* libsmbfs */
 #include <assert.h>
-
-#define	NTLM_CHAL_SZ	SMBAUTH_CHAL_SZ	/* challenge size */
-
-/*
- * Compute the combined (server+client) challenge per. [MS-NLMP 3.3.1]
- * MD5(concat(ServerChallenge,ClientChallenge))
- */
-void
-smb_auth_ntlm2_mkchallenge(char *result,
-	const char *srv_chal, const char *clnt_chal)
-{
-	MD5_CTX context;
-	uchar_t challenges[2 * NTLM_CHAL_SZ];
-	uchar_t digest[SMBAUTH_HASH_SZ];
-
-	/*
-	 * challenges = ConcatenationOf(ServerChallenge, ClientChallenge)
-	 */
-	(void) memcpy(challenges, srv_chal, NTLM_CHAL_SZ);
-	(void) memcpy(challenges + NTLM_CHAL_SZ, clnt_chal, NTLM_CHAL_SZ);
-
-	/*
-	 * digest = MD5(challenges)
-	 */
-	MD5Init(&context);
-	MD5Update(&context, challenges, sizeof (challenges));
-	MD5Final(digest, &context);
-
-	/*
-	 * result = digest[0..7]
-	 */
-	(void) memcpy(result, digest, NTLM_CHAL_SZ);
-}
-
-void
-smb_auth_ntlm2_kxkey(unsigned char *result, const char *srv_chal,
-	const char *clnt_chal, unsigned char *ssn_base_key)
-{
-	uchar_t challenges[2 * NTLM_CHAL_SZ];
-
-	/*
-	 * challenges = ConcatenationOf(ServerChallenge, ClientChallenge)
-	 */
-	(void) memcpy(challenges, srv_chal, NTLM_CHAL_SZ);
-	(void) memcpy(challenges + NTLM_CHAL_SZ, clnt_chal, NTLM_CHAL_SZ);
-
-	/* HMAC_MD5(SessionBaseKey, concat(...)) */
-	/* SMBAUTH_HMACT64 args: D, Dsz, K, Ksz, digest */
-	(void) SMBAUTH_HMACT64(challenges, sizeof (challenges),
-	    ssn_base_key, SMBAUTH_HASH_SZ, result);
-}
 
 /*
  * smb_auth_qnd_unicode
@@ -330,6 +277,35 @@ smb_auth_v2_response(
 	return (SMBAUTH_HASH_SZ + clen);
 }
 
+/*
+ * smb_auth_gen_session_key
+ *
+ * Generate the NTLM user session key if LMCompatibilityLevel is 2 or
+ * NTLMv2 user session key if LMCompatibilityLevel is 3 or above.
+ *
+ * NTLM_Session_Key = MD4(NTLM_Hash);
+ *
+ * NTLMv2_Session_Key = HMAC_MD5(NTLMv2Hash, 16, NTLMv2_HMAC, 16)
+ *
+ * Prior to calling this function, the auth instance should be set
+ * via smb_auth_set_info().
+ *
+ * Returns the appropriate session key.
+ */
+int
+smb_auth_gen_session_key(smb_auth_info_t *auth, unsigned char *session_key)
+{
+	int rc;
+
+	if (auth->lmcompatibility_lvl == 2)
+		rc = smb_auth_md4(session_key, auth->hash, SMBAUTH_HASH_SZ);
+	else
+		rc = SMBAUTH_HMACT64((unsigned char *)auth->cs,
+		    SMBAUTH_HASH_SZ, (unsigned char *)auth->hash_v2,
+		    SMBAUTH_SESSION_KEY_SZ, session_key);
+
+	return (rc);
+}
 
 static boolean_t
 smb_lm_password_ok(
@@ -583,6 +559,45 @@ smb_auth_validate(
 		return (ok);
 
 	return (B_FALSE);
+}
+
+/*
+ * smb_gen_random_passwd(buf, len)
+ * Generate a random password of length len-1, and store it in buf,
+ * null terminated.  This is used as a machine account password,
+ * which we set when we join a domain.
+ *
+ * [MS-DISO] A machine password is an ASCII string of randomly chosen
+ * characters. Each character's ASCII code is between 32 and 122 inclusive.
+ * That's space through 'z'.
+ */
+
+int
+smb_gen_random_passwd(char *buf, size_t len)
+{
+	const uchar_t start = ' ';
+	const uchar_t modulus = 'z' - ' ' + 1;
+	uchar_t t;
+	int i;
+
+	/* Last byte is the null. */
+	len--;
+
+	/* Temporarily put random data in the caller's buffer. */
+	randomize(buf, len);
+
+	/* Convert the random data to printable characters. */
+	for (i = 0; i < len; i++) {
+		/* need unsigned math */
+		t = (uchar_t)buf[i];
+		t = (t % modulus) + start;
+		assert(' ' <= t && t <= 'z');
+		buf[i] = (char)t;
+	}
+
+	buf[len] = '\0';
+
+	return (0);
 }
 
 /*

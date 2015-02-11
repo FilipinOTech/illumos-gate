@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <syslog.h>
@@ -66,6 +66,8 @@ static pthread_t smb_dclocator_thr;
 static void *smb_ddiscover_service(void *);
 static void smb_ddiscover_main(char *, char *);
 static uint32_t smb_ddiscover_dns(char *, char *, smb_domainex_t *);
+static boolean_t smb_ddiscover_nbt(char *, char *, smb_domainex_t *);
+static boolean_t smb_ddiscover_domain_match(char *, char *, uint32_t);
 static uint32_t smb_ddiscover_qinfo(char *, char *, smb_domainex_t *);
 static void smb_ddiscover_enum_trusted(char *, char *, smb_domainex_t *);
 static uint32_t smb_ddiscover_use_config(char *, smb_domainex_t *);
@@ -241,6 +243,11 @@ smb_ddiscover_main(char *domain, char *server)
 		return;
 
 	status = smb_ddiscover_dns(domain, server, &dxi);
+	if (status != 0 && !SMB_IS_FQDN(domain)) {
+		if (smb_ddiscover_nbt(domain, server, &dxi))
+			status = 0;
+	}
+
 	if (status == 0)
 		smb_domain_update(&dxi);
 
@@ -261,13 +268,110 @@ smb_ddiscover_dns(char *domain, char *server, smb_domainex_t *dxi)
 {
 	uint32_t status;
 
-	status = smb_ads_lookup_msdcs(domain, server, dxi->d_dc,
-	    MAXHOSTNAMELEN);
-	if (status != 0)
-		return (status);
+	if (!smb_ads_lookup_msdcs(domain, server, dxi->d_dc, MAXHOSTNAMELEN))
+		return (NT_STATUS_DOMAIN_CONTROLLER_NOT_FOUND);
 
 	status = smb_ddiscover_qinfo(domain, dxi->d_dc, dxi);
 	return (status);
+}
+
+/*
+ * Discovers a DC for the specified domain using NETLOGON protocol.
+ * If a DC cannot be found using NETLOGON then it will
+ * try to resolve it via DNS, i.e. find out if it is the first label
+ * of a DNS domain name. If the corresponding DNS name is found, DC
+ * discovery will be done via DNS query.
+ *
+ * If the fully-qualified domain name is derived from the DNS config
+ * file, the NetBIOS domain name specified by the user will be compared
+ * against the NetBIOS domain name obtained via LSA query.  If there is
+ * a mismatch, the DC discovery will fail since the discovered DC is
+ * actually for another domain, whose first label of its FQDN somehow
+ * matches with the NetBIOS name of the domain we're interested in.
+ */
+static boolean_t
+smb_ddiscover_nbt(char *domain, char *server, smb_domainex_t *dxi)
+{
+	char dnsdomain[MAXHOSTNAMELEN];
+	uint32_t status;
+
+	*dnsdomain = '\0';
+
+	if (!smb_browser_netlogon(domain, dxi->d_dc, MAXHOSTNAMELEN)) {
+		if (!smb_ddiscover_domain_match(domain, dnsdomain,
+		    MAXHOSTNAMELEN))
+			return (B_FALSE);
+
+		if (!smb_ads_lookup_msdcs(dnsdomain, server, dxi->d_dc,
+		    MAXHOSTNAMELEN))
+			return (B_FALSE);
+	}
+
+	status = smb_ddiscover_qinfo(domain, dxi->d_dc, dxi);
+	if (status != NT_STATUS_SUCCESS)
+		return (B_FALSE);
+
+	if ((*dnsdomain != '\0') &&
+	    smb_strcasecmp(domain, dxi->d_primary.di_nbname, 0))
+		return (B_FALSE);
+
+	/*
+	 * Now that we get the fully-qualified DNS name of the
+	 * domain via LSA query. Verifies ADS configuration
+	 * if we previously locate a DC via NetBIOS. On success,
+	 * ADS cache will be populated.
+	 */
+	if (smb_ads_lookup_msdcs(dxi->d_primary.di_fqname, server,
+	    dxi->d_dc, MAXHOSTNAMELEN) == 0)
+		return (B_FALSE);
+
+	return (B_TRUE);
+}
+
+/*
+ * Tries to find a matching DNS domain for the given NetBIOS domain
+ * name by checking the first label of system's configured DNS domains.
+ * If a match is found, it'll be returned in the passed buffer.
+ */
+static boolean_t
+smb_ddiscover_domain_match(char *nb_domain, char *buf, uint32_t len)
+{
+	struct __res_state res_state;
+	int i;
+	char *entry, *p;
+	char first_label[MAXHOSTNAMELEN];
+	boolean_t found;
+
+	if (!nb_domain || !buf)
+		return (B_FALSE);
+
+	*buf = '\0';
+	bzero(&res_state, sizeof (struct __res_state));
+	if (res_ninit(&res_state))
+		return (B_FALSE);
+
+	found = B_FALSE;
+	entry = res_state.defdname;
+	for (i = 0; entry != NULL; i++) {
+		(void) strlcpy(first_label, entry, MAXHOSTNAMELEN);
+		if ((p = strchr(first_label, '.')) != NULL) {
+			*p = '\0';
+			if (strlen(first_label) > 15)
+				first_label[15] = '\0';
+		}
+
+		if (smb_strcasecmp(nb_domain, first_label, 0) == 0) {
+			found = B_TRUE;
+			(void) strlcpy(buf, entry, len);
+			break;
+		}
+
+		entry = res_state.dnsrch[i];
+	}
+
+
+	res_ndestroy(&res_state);
+	return (found);
 }
 
 /*

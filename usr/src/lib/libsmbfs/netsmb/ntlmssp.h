@@ -22,7 +22,6 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- *
  * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
@@ -41,6 +40,14 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/*
+ * NTLMSSP Message Types
+ * [MS-NLMP] sec. 2.2.1
+ */
+#define	NTLMSSP_MSGTYPE_NEGOTIATE	1
+#define	NTLMSSP_MSGTYPE_CHALLENGE	2
+#define	NTLMSSP_MSGTYPE_AUTHENTICATE	3
 
 /*
  * NTLMSSP Message Types

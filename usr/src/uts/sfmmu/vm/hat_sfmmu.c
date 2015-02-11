@@ -2152,7 +2152,7 @@ hat_dup(struct hat *hat, struct hat *newhat, caddr_t addr, size_t len,
 		VN_HOLD(srdp->srd_evp);
 		ASSERT(srdp->srd_refcnt > 0);
 		newhat->sfmmu_srdp = srdp;
-		atomic_add_32((volatile uint_t *)&srdp->srd_refcnt, 1);
+		atomic_inc_32((volatile uint_t *)&srdp->srd_refcnt);
 	}
 
 	/*
@@ -3228,7 +3228,7 @@ sfmmu_tteload_addentry(sfmmu_t *sfmmup, struct hme_blk *hmeblkp, tte_t *ttep,
 			panic("too high lckcnt-hmeblk %p",
 			    (void *)hmeblkp);
 		}
-		atomic_add_32(&hmeblkp->hblk_lckcnt, 1);
+		atomic_inc_32(&hmeblkp->hblk_lckcnt);
 
 		HBLK_STACK_TRACE(hmeblkp, HBLK_LOCK);
 	}
@@ -3263,9 +3263,9 @@ sfmmu_tteload_addentry(sfmmu_t *sfmmup, struct hme_blk *hmeblkp, tte_t *ttep,
 
 	if (!TTE_IS_VALID(&tteold)) {
 
-		atomic_add_16(&hmeblkp->hblk_vcnt, 1);
+		atomic_inc_16(&hmeblkp->hblk_vcnt);
 		if (rid == SFMMU_INVALID_SHMERID) {
-			atomic_add_long(&sfmmup->sfmmu_ttecnt[size], 1);
+			atomic_inc_ulong(&sfmmup->sfmmu_ttecnt[size]);
 		} else {
 			sf_srd_t *srdp = sfmmup->sfmmu_srdp;
 			sf_region_t *rgnp = srdp->srd_hmergnp[rid];
@@ -3274,7 +3274,7 @@ sfmmu_tteload_addentry(sfmmu_t *sfmmup, struct hme_blk *hmeblkp, tte_t *ttep,
 			 * during hat_join_region() processing. Here we
 			 * only update ttecnt's in region struture.
 			 */
-			atomic_add_long(&rgnp->rgn_ttecnt[size], 1);
+			atomic_inc_ulong(&rgnp->rgn_ttecnt[size]);
 		}
 	}
 
@@ -3382,7 +3382,7 @@ sfmmu_tteload_addentry(sfmmu_t *sfmmup, struct hme_blk *hmeblkp, tte_t *ttep,
 	if (pp) {
 		if (!remap) {
 			HME_ADD(sfhme, pp);
-			atomic_add_16(&hmeblkp->hblk_hmecnt, 1);
+			atomic_inc_16(&hmeblkp->hblk_hmecnt);
 			ASSERT(hmeblkp->hblk_hmecnt > 0);
 
 			/*
@@ -3679,7 +3679,7 @@ sfmmu_shadow_hcreate(sfmmu_t *sfmmup, caddr_t vaddr, int ttesz, uint_t flags)
 	do {
 		shw_mask = hmeblkp->hblk_shw_mask;
 		newshw_mask = shw_mask | (1 << vshift);
-		newshw_mask = cas32(&hmeblkp->hblk_shw_mask, shw_mask,
+		newshw_mask = atomic_cas_32(&hmeblkp->hblk_shw_mask, shw_mask,
 		    newshw_mask);
 	} while (newshw_mask != shw_mask);
 
@@ -4155,7 +4155,7 @@ readtte:
 				panic("can't unlock large tte");
 
 			ASSERT(hmeblkp->hblk_lckcnt > 0);
-			atomic_add_32(&hmeblkp->hblk_lckcnt, -1);
+			atomic_dec_32(&hmeblkp->hblk_lckcnt);
 			HBLK_STACK_TRACE(hmeblkp, HBLK_UNLOCK);
 		} else {
 			panic("sfmmu_hblk_unlock: invalid tte");
@@ -6134,7 +6134,7 @@ again:
 
 			if (flags & HAT_UNLOAD_UNLOCK) {
 				ASSERT(hmeblkp->hblk_lckcnt > 0);
-				atomic_add_32(&hmeblkp->hblk_lckcnt, -1);
+				atomic_dec_32(&hmeblkp->hblk_lckcnt);
 				HBLK_STACK_TRACE(hmeblkp, HBLK_UNLOCK);
 			}
 
@@ -6188,11 +6188,11 @@ again:
 				 */
 				HME_SUB(sfhmep, pp);
 				membar_stst();
-				atomic_add_16(&hmeblkp->hblk_hmecnt, -1);
+				atomic_dec_16(&hmeblkp->hblk_hmecnt);
 			}
 
 			ASSERT(hmeblkp->hblk_vcnt > 0);
-			atomic_add_16(&hmeblkp->hblk_vcnt, -1);
+			atomic_dec_16(&hmeblkp->hblk_vcnt);
 
 			ASSERT(hmeblkp->hblk_hmecnt || hmeblkp->hblk_vcnt ||
 			    !hmeblkp->hblk_lckcnt);
@@ -7350,10 +7350,10 @@ readtte:
 			cpuset = sfmmu_rgntlb_demap(addr, rgnp, hmeblkp, 1);
 			sfmmu_ttesync(NULL, addr, &tte, pp);
 			ASSERT(rgnp->rgn_ttecnt[ttesz] > 0);
-			atomic_add_long(&rgnp->rgn_ttecnt[ttesz], -1);
+			atomic_dec_ulong(&rgnp->rgn_ttecnt[ttesz]);
 		} else {
 			sfmmu_ttesync(sfmmup, addr, &tte, pp);
-			atomic_add_long(&sfmmup->sfmmu_ttecnt[ttesz], -1);
+			atomic_dec_ulong(&sfmmup->sfmmu_ttecnt[ttesz]);
 
 			/*
 			 * We need to flush the page from the virtual cache
@@ -7414,8 +7414,8 @@ readtte:
 		 */
 		ASSERT(hmeblkp->hblk_hmecnt > 0);
 		ASSERT(hmeblkp->hblk_vcnt > 0);
-		atomic_add_16(&hmeblkp->hblk_vcnt, -1);
-		atomic_add_16(&hmeblkp->hblk_hmecnt, -1);
+		atomic_dec_16(&hmeblkp->hblk_vcnt);
+		atomic_dec_16(&hmeblkp->hblk_hmecnt);
 		/*
 		 * This is bug 4063182.
 		 * XXX: fixme
@@ -11679,7 +11679,7 @@ sfmmu_steal_this_hblk(struct hmehash_bucket *hmebp, struct hme_blk *hmeblkp,
 			shw_mask = shw_hblkp->hblk_shw_mask;
 			ASSERT(shw_mask & (1 << vshift));
 			newshw_mask = shw_mask & ~(1 << vshift);
-			newshw_mask = cas32(&shw_hblkp->hblk_shw_mask,
+			newshw_mask = atomic_cas_32(&shw_hblkp->hblk_shw_mask,
 			    shw_mask, newshw_mask);
 		} while (newshw_mask != shw_mask);
 		hmeblkp->hblk_shadow = NULL;
@@ -13814,8 +13814,8 @@ hat_join_srd(struct hat *sfmmup, vnode_t *evp)
 			if (srdp->srd_evp == evp) {
 				ASSERT(srdp->srd_refcnt >= 0);
 				sfmmup->sfmmu_srdp = srdp;
-				atomic_add_32(
-				    (volatile uint_t *)&srdp->srd_refcnt, 1);
+				atomic_inc_32(
+				    (volatile uint_t *)&srdp->srd_refcnt);
 				mutex_exit(&srd_buckets[hash].srdb_lock);
 				return;
 			}
@@ -13836,7 +13836,7 @@ hat_join_srd(struct hat *sfmmup, vnode_t *evp)
 		if (srdp->srd_evp == evp) {
 			ASSERT(srdp->srd_refcnt >= 0);
 			sfmmup->sfmmu_srdp = srdp;
-			atomic_add_32((volatile uint_t *)&srdp->srd_refcnt, 1);
+			atomic_inc_32((volatile uint_t *)&srdp->srd_refcnt);
 			mutex_exit(&srd_buckets[hash].srdb_lock);
 			kmem_cache_free(srd_cache, newsrdp);
 			return;
@@ -13873,8 +13873,7 @@ sfmmu_leave_srd(sfmmu_t *sfmmup)
 	sfmmup->sfmmu_srdp = NULL;
 	evp = srdp->srd_evp;
 	ASSERT(evp != NULL);
-	if (atomic_add_32_nv(
-	    (volatile uint_t *)&srdp->srd_refcnt, -1)) {
+	if (atomic_dec_32_nv((volatile uint_t *)&srdp->srd_refcnt)) {
 		VN_RELE(evp);
 		return;
 	}
@@ -14091,7 +14090,7 @@ rfound:
 		ASSERT(rid < maxids);
 		ASSERT(rarrp[rid] == rgnp);
 		ASSERT(rid < *nextidp);
-		atomic_add_32((volatile uint_t *)&rgnp->rgn_refcnt, 1);
+		atomic_inc_32((volatile uint_t *)&rgnp->rgn_refcnt);
 		mutex_exit(&srdp->srd_mutex);
 		if (new_rgnp != NULL) {
 			kmem_cache_free(region_cache, new_rgnp);
@@ -14441,7 +14440,7 @@ hat_leave_region(struct hat *sfmmup, hat_region_cookie_t rcookie, uint_t flags)
 	}
 
 	r_obj = rgnp->rgn_obj;
-	if (atomic_add_32_nv((volatile uint_t *)&rgnp->rgn_refcnt, -1)) {
+	if (atomic_dec_32_nv((volatile uint_t *)&rgnp->rgn_refcnt)) {
 		return;
 	}
 
@@ -14526,7 +14525,7 @@ hat_dup_region(struct hat *sfmmup, hat_region_cookie_t rcookie)
 	ASSERT((rgnp->rgn_flags & SFMMU_REGION_TYPE_MASK) == SFMMU_REGION_HME);
 	ASSERT(!(rgnp->rgn_flags & SFMMU_REGION_FREE));
 
-	atomic_add_32((volatile uint_t *)&rgnp->rgn_refcnt, 1);
+	atomic_inc_32((volatile uint_t *)&rgnp->rgn_refcnt);
 
 	/* LINTED: constant in conditional context */
 	SFMMU_HMERID2RLINKP(sfmmup, rid, rlink, 1, 0);
@@ -15256,8 +15255,7 @@ sfmmu_find_scd(sfmmu_t *sfmmup)
 			mutex_exit(&srdp->srd_scd_mutex);
 			sfmmu_join_scd(scdp, sfmmup);
 			ASSERT(scdp->scd_refcnt >= 2);
-			atomic_add_32((volatile uint32_t *)
-			    &scdp->scd_refcnt, -1);
+			atomic_dec_32((volatile uint32_t *)&scdp->scd_refcnt);
 			return;
 		} else {
 			/*
@@ -15302,7 +15300,7 @@ sfmmu_find_scd(sfmmu_t *sfmmup)
 	mutex_exit(&srdp->srd_scd_mutex);
 	sfmmu_join_scd(new_scdp, sfmmup);
 	ASSERT(new_scdp->scd_refcnt >= 2);
-	atomic_add_32((volatile uint32_t *)&new_scdp->scd_refcnt, -1);
+	atomic_dec_32((volatile uint32_t *)&new_scdp->scd_refcnt);
 }
 
 /*
@@ -15758,7 +15756,7 @@ sfmmu_hblk_hash_rm(struct hmehash_bucket *hmebp, struct hme_blk *hmeblkp,
 			shw_mask = shw_hblkp->hblk_shw_mask;
 			ASSERT(shw_mask & (1 << vshift));
 			newshw_mask = shw_mask & ~(1 << vshift);
-			newshw_mask = cas32(&shw_hblkp->hblk_shw_mask,
+			newshw_mask = atomic_cas_32(&shw_hblkp->hblk_shw_mask,
 			    shw_mask, newshw_mask);
 		} while (newshw_mask != shw_mask);
 		hmeblkp->hblk_shadow = NULL;

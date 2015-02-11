@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014 by Delphix. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -303,7 +304,7 @@ ptable_alloc(uintptr_t seed)
 	pfn = pp->p_pagenum;
 	if (pfn == PFN_INVALID)
 		panic("ptable_alloc(): Invalid PFN!!");
-	atomic_add_32(&active_ptables, 1);
+	atomic_inc_32(&active_ptables);
 	HATSTAT_INC(hs_ptable_allocs);
 	return (pfn);
 }
@@ -322,7 +323,7 @@ ptable_free(pfn_t pfn)
 	 */
 	ASSERT(pfn != PFN_INVALID);
 	HATSTAT_INC(hs_ptable_frees);
-	atomic_add_32(&active_ptables, -1);
+	atomic_dec_32(&active_ptables);
 	if (pp == NULL)
 		panic("ptable_free(): no page for pfn!");
 	ASSERT(PAGE_SHARED(pp));
@@ -429,7 +430,6 @@ htable_adjust_reserve()
 /*
  * Search the active htables for one to steal. Start at a different hash
  * bucket every time to help spread the pain of stealing
- * (factored out from htable_steal())
  */
 static void
 htable_steal_active(hat_t *hat, uint_t cnt, uint_t threshold,
@@ -445,8 +445,7 @@ htable_steal_active(hat_t *hat, uint_t cnt, uint_t threshold,
 	do {
 		higher = NULL;
 		HTABLE_ENTER(h);
-		for (ht = hat->hat_ht_hash[h]; ht;
-		     ht = ht->ht_next) {
+		for (ht = hat->hat_ht_hash[h]; ht; ht = ht->ht_next) {
 
 			/*
 			 * Can we rule out reaping?
@@ -471,13 +470,14 @@ htable_steal_active(hat_t *hat, uint_t cnt, uint_t threshold,
 			 * - unload and invalidate all PTEs
 			 */
 			for (e = 0, va = ht->ht_vaddr;
-			     e < HTABLE_NUM_PTES(ht) && ht->ht_valid_cnt > 0 &&
-				 ht->ht_busy == 1 && ht->ht_lock_cnt == 0;
-			     ++e, va += MMU_PAGESIZE) {
+			    e < HTABLE_NUM_PTES(ht) && ht->ht_valid_cnt > 0 &&
+			    ht->ht_busy == 1 && ht->ht_lock_cnt == 0;
+			    ++e, va += MMU_PAGESIZE) {
 				pte = x86pte_get(ht, e);
 				if (!PTE_ISVALID(pte))
 					continue;
-				hat_pte_unmap(ht, e, HAT_UNLOAD, pte, NULL);
+				hat_pte_unmap(ht, e, HAT_UNLOAD, pte, NULL,
+				    B_TRUE);
 			}
 
 			/*
@@ -532,7 +532,6 @@ htable_steal_active(hat_t *hat, uint_t cnt, uint_t threshold,
 
 /*
  * Move hat to the end of the kas list
- * (factored out from htable_steal())
  */
 static void
 move_victim(hat_t *hat)
@@ -561,8 +560,8 @@ move_victim(hat_t *hat)
 }
 
 /*
- * This routine steals htables from user processes for htable_alloc() or
- * for htable_reap().
+ * This routine steals htables from user processes.  Called by htable_reap
+ * (reap=TRUE) or htable_alloc (reap=FALSE).
  */
 static htable_t *
 htable_steal(uint_t cnt, boolean_t reap)
@@ -586,13 +585,13 @@ htable_steal(uint_t cnt, boolean_t reap)
 	 * Loop through all user hats. The 1st pass takes cached htables that
 	 * aren't in use. The later passes steal by removing mappings, too.
 	 */
-	atomic_add_32(&htable_dont_cache, 1);
+	atomic_inc_32(&htable_dont_cache);
 	for (pass = 0; pass <= htable_steal_passes && stolen < cnt; ++pass) {
 		threshold = pass * mmu.ptes_per_table / htable_steal_passes;
 
 		mutex_enter(&hat_list_lock);
 
-		/* skip the firt kernel hat */
+		/* skip the first hat (kernel) */
 		hat = kas.a_hat->hat_next;
 		for (;;) {
 			/*
@@ -702,7 +701,7 @@ htable_steal(uint_t cnt, boolean_t reap)
 	}
 	ASSERT(!MUTEX_HELD(&hat_list_lock));
 
-	atomic_add_32(&htable_dont_cache, -1);
+	atomic_dec_32(&htable_dont_cache);
 	return (list);
 }
 
@@ -729,14 +728,14 @@ htable_reap(void *handle)
 	reap_cnt = MAX(MIN(physmem / 20, active_ptables / 20), 10);
 
 	/*
-	 * Let htable_steal() do the work, we just call htable_free()
-	 */
-	XPV_DISALLOW_MIGRATE();
-	/*
 	 * Note: htable_dont_cache should be set at the time of
 	 * invoking htable_free()
 	 */
-	atomic_add_32(&htable_dont_cache, 1);
+	atomic_inc_32(&htable_dont_cache);
+	/*
+	 * Let htable_steal() do the work, we just call htable_free()
+	 */
+	XPV_DISALLOW_MIGRATE();
 	list = htable_steal(reap_cnt, B_TRUE);
 	XPV_ALLOW_MIGRATE();
 	while ((ht = list) != NULL) {
@@ -744,7 +743,7 @@ htable_reap(void *handle)
 		HATSTAT_INC(hs_reaped);
 		htable_free(ht);
 	}
-	atomic_add_32(&htable_dont_cache, -1);
+	atomic_dec_32(&htable_dont_cache);
 
 	/*
 	 * Free up excess reserves
@@ -1024,7 +1023,7 @@ htable_purge_hat(hat_t *hat)
 	 * Purge the htable cache if just reaping.
 	 */
 	if (!(hat->hat_flags & HAT_FREEING)) {
-		atomic_add_32(&htable_dont_cache, 1);
+		atomic_inc_32(&htable_dont_cache);
 		for (;;) {
 			hat_enter(hat);
 			ht = hat->hat_ht_cached;
@@ -1036,7 +1035,7 @@ htable_purge_hat(hat_t *hat)
 			hat_exit(hat);
 			htable_free(ht);
 		}
-		atomic_add_32(&htable_dont_cache, -1);
+		atomic_dec_32(&htable_dont_cache);
 		return;
 	}
 
@@ -2212,14 +2211,17 @@ x86pte_cas(htable_t *ht, uint_t entry, x86pte_t old, x86pte_t new)
  * Invalidate a page table entry as long as it currently maps something that
  * matches the value determined by expect.
  *
- * Also invalidates any TLB entries and returns the previous value of the PTE.
+ * If tlb is set, also invalidates any TLB entries.
+ *
+ * Returns the previous value of the PTE.
  */
 x86pte_t
 x86pte_inval(
 	htable_t *ht,
 	uint_t entry,
 	x86pte_t expect,
-	x86pte_t *pte_ptr)
+	x86pte_t *pte_ptr,
+	boolean_t tlb)
 {
 	x86pte_t	*ptep;
 	x86pte_t	oldpte;
@@ -2268,7 +2270,7 @@ x86pte_inval(
 		found = CAS_PTE(ptep, oldpte, 0);
 		XPV_DISALLOW_PAGETABLE_UPDATES();
 	} while (found != oldpte);
-	if (oldpte & (PT_REF | PT_MOD))
+	if (tlb && (oldpte & (PT_REF | PT_MOD)))
 		hat_tlb_inval(ht->ht_hat, htable_e2va(ht, entry));
 
 done:

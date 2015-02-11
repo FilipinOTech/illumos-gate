@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -88,26 +88,8 @@ extern	int smb_opipe_threshold;
 extern	int smb_ssetup_timeout;
 extern	int smb_tcon_timeout;
 extern	int smb_opipe_timeout;
+extern	int smb_threshold_debug;
 extern const uint32_t smb_vop_dosattr_settable;
-
-/* Thread priorities - see smb_init.c */
-extern	int smbsrv_base_pri;
-extern	int smbsrv_listen_pri;
-extern	int smbsrv_receive_pri;
-extern	int smbsrv_worker_pri;
-extern	int smbsrv_notify_pri;
-extern	int smbsrv_timer_pri;
-
-extern	kmem_cache_t		*smb_cache_request;
-extern	kmem_cache_t		*smb_cache_session;
-extern	kmem_cache_t		*smb_cache_user;
-extern	kmem_cache_t		*smb_cache_tree;
-extern	kmem_cache_t		*smb_cache_ofile;
-extern	kmem_cache_t		*smb_cache_odir;
-extern	kmem_cache_t		*smb_cache_opipe;
-extern	kmem_cache_t		*smb_cache_event;
-
-extern	kmem_cache_t		*smb_kshare_cache_vfs;
 
 int		fd_dealloc(int);
 
@@ -380,12 +362,12 @@ void	smbsr_status_smb2(smb_request_t *, DWORD);
 
 int	clock_get_milli_uptime(void);
 
-int	smb_mbc_vencodef(mbuf_chain_t *, const char *, va_list);
-int	smb_mbc_vdecodef(mbuf_chain_t *, const char *, va_list);
-int	smb_mbc_decodef(mbuf_chain_t *, const char *, ...);
-int	smb_mbc_encodef(mbuf_chain_t *, const char *, ...);
-int	smb_mbc_peek(mbuf_chain_t *, int, const char *, ...);
-int	smb_mbc_poke(mbuf_chain_t *, int, const char *, ...);
+int	smb_mbc_vencodef(mbuf_chain_t *, char *, va_list);
+int	smb_mbc_vdecodef(mbuf_chain_t *, char *, va_list);
+int	smb_mbc_decodef(mbuf_chain_t *, char *, ...);
+int	smb_mbc_encodef(mbuf_chain_t *, char *, ...);
+int	smb_mbc_peek(mbuf_chain_t *, int, char *, ...);
+int	smb_mbc_poke(mbuf_chain_t *, int, char *, ...);
 int	smb_mbc_put_mem(mbuf_chain_t *, void *, int);
 int	smb_mbc_copy(mbuf_chain_t *, const mbuf_chain_t *, int, int);
 

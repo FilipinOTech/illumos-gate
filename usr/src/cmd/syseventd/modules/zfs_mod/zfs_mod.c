@@ -22,7 +22,7 @@
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012 by Delphix. All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
  */
 
 /*
@@ -180,7 +180,8 @@ zfs_process_add(zpool_handle_t *zhp, nvlist_t *vdev, boolean_t isdisk)
 	if (offline ||
 	    (zpool_vdev_online(zhp, fullpath,
 	    ZFS_ONLINE_CHECKREMOVE | ZFS_ONLINE_UNSPARE, &newstate) == 0 &&
-	    (newstate == VDEV_STATE_HEALTHY || newstate == VDEV_STATE_DEGRADED)))
+	    (newstate == VDEV_STATE_HEALTHY ||
+	    newstate == VDEV_STATE_DEGRADED)))
 		return;
 
 	/*

@@ -143,7 +143,6 @@ smb_nt_transact_create(smb_request_t *sr, smb_xa_t *xa)
 	uint8_t			DirFlag;
 	smb_attr_t		attr;
 	smb_ofile_t		*of;
-	uint32_t		status;
 	int			rc;
 
 	if ((op->create_options & FILE_DELETE_ON_CLOSE) &&
@@ -185,11 +184,16 @@ smb_nt_transact_create(smb_request_t *sr, smb_xa_t *xa)
 
 	op->op_oplock_levelII = B_TRUE;
 
-	status = smb_common_open(sr);
-	if (status != NT_STATUS_SUCCESS) {
-		smbsr_status(sr, status, 0, 0);
+	if (smb_common_open(sr) != NT_STATUS_SUCCESS)
 		return (SDRC_ERROR);
 	}
+
+	/*
+	 * NB: after the above smb_common_open() success,
+	 * we have a handle allocated (sr->fid_ofile).
+	 * If we don't return success, we must close it.
+	 */
+	of = sr->fid_ofile;
 
 	/*
 	 * NB: after the above smb_common_open() success,
@@ -254,7 +258,8 @@ smb_nt_transact_create(smb_request_t *sr, smb_xa_t *xa)
 		    ERRDOS, ERROR_INVALID_FUNCTION);
 		goto errout;
 	}
-	return (SDRC_SUCCESS);
+	if (rc == 0)
+		return (SDRC_SUCCESS);
 
 errout:
 	smb_ofile_close(of, 0);

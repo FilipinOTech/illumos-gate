@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 
@@ -62,19 +62,6 @@
  */
 #define	ID_CACHE_TMO_DEFAULT	86400
 #define	NAME_CACHE_TMO_DEFAULT	604800
-
-/*
- * Default maximum time between rediscovery runs.
- * config/rediscovery_interval = count: seconds
- */
-#define	REDISCOVERY_INTERVAL_DEFAULT	3600
-
-/*
- * Mininum time between rediscovery runs, in case adutils gives us a
- * really short TTL (which it never should, but be defensive)
- * (not configurable) seconds.
- */
-#define	MIN_REDISCOVERY_INTERVAL	60
 
 enum event_type {
 	EVENT_NOTHING,	/* Woke up for no good reason */
@@ -1937,6 +1924,12 @@ idmap_cfg_discover(idmap_cfg_handles_t *handles, idmap_pg_config_t *pgcfg)
 {
 	ad_disc_t ad_ctx = handles->ad_ctx;
 	FILE *status_fp = NULL;
+
+	if (pgcfg->use_ads == B_FALSE) {
+		if (DBG(CONFIG, 1))
+			idmapdlog(LOG_DEBUG, "ADS disabled.");
+		return;
+	}
 
 	if (DBG(CONFIG, 1))
 		idmapdlog(LOG_DEBUG, "Running discovery.");

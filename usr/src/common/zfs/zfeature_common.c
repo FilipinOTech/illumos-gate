@@ -57,7 +57,8 @@ valid_char(char c, boolean_t after_colon)
 {
 	return ((c >= 'a' && c <= 'z') ||
 	    (c >= '0' && c <= '9') ||
-	    c == (after_colon ? '_' : '.'));
+	    (after_colon && c == '_') ||
+	    (!after_colon && (c == '.' || c == '-')));
 }
 
 /*
@@ -224,17 +225,12 @@ zpool_feature_init(void)
 	    "Blocks which compress very well use even less space.",
 	    B_FALSE, B_TRUE, B_TRUE, NULL);
 
-	zfeature_register(SPA_FEATURE_META_DEVICES,
-	    "com.nexenta:meta_devices", "meta_devices",
-	    "Dedicated devices for metadata.", B_TRUE, B_FALSE, B_FALSE, NULL);
-	zfeature_register(SPA_FEATURE_VDEV_PROPS,
-	    "com.nexenta:vdev_properties", "vdev_properties",
-	    "Vdev-specific properties.", B_TRUE, B_FALSE, B_FALSE, NULL);
-	zfeature_register(SPA_FEATURE_COS_PROPS,
-	    "com.nexenta:class_of_storage", "class_of_storage",
-	    "Properties for groups of vdevs.", B_TRUE, B_FALSE, B_FALSE,
-	    cos_deps);
-	zfeature_register(SPA_FEATURE_SHA1CRC32,
-	    "com.nexenta:checksum_sha1crc32", "checksum_sha1crc32",
-	    "Support for sha1crc32 checksum.", B_FALSE, B_FALSE, B_FALSE, NULL);
+	static const spa_feature_t large_blocks_deps[] = {
+		SPA_FEATURE_EXTENSIBLE_DATASET,
+		SPA_FEATURE_NONE
+	};
+	zfeature_register(SPA_FEATURE_LARGE_BLOCKS,
+	    "org.open-zfs:large_blocks", "large_blocks",
+	    "Support for blocks larger than 128KB.", B_FALSE, B_FALSE, B_FALSE,
+	    large_blocks_deps);
 }

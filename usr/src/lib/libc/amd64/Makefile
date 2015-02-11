@@ -20,7 +20,7 @@
 #
 #
 # Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2012, Joyent, Inc. All rights reserved.
+# Copyright (c) 2015, Joyent, Inc. All rights reserved.
 #
 # Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
 # Copyright 2013 Garrett D'Amore <garrett@damore.org>
@@ -47,12 +47,12 @@ CRTOBJS=			\
 DYNOBJS=
 
 FPOBJS=				\
-	_base_il.o		\
 	fpgetmask.o		\
 	fpgetround.o		\
 	fpsetmask.o		\
 	fpsetround.o		\
-	fpstart.o
+	fpstart.o		\
+	ieee.o
 
 I386FPOBJS=			\
 	_D_cplx_div.o		\
@@ -81,6 +81,7 @@ FPASMOBJS=			\
 	__xgetRD.o		\
 	_xtoll.o		\
 	_xtoull.o		\
+	_base_il.o		\
 	fpcw.o			\
 	fpgetsticky.o		\
 	fpsetsticky.o
@@ -228,6 +229,7 @@ COMSYSOBJS=			\
 	pipe2.o			\
 	pollsys.o		\
 	pread.o			\
+	preadv.o		\
 	priocntlset.o		\
 	processor_bind.o	\
 	processor_info.o	\
@@ -235,6 +237,7 @@ COMSYSOBJS=			\
 	putmsg.o		\
 	putpmsg.o		\
 	pwrite.o		\
+	pwritev.o		\
 	read.o			\
 	readv.o			\
 	resolvepath.o		\
