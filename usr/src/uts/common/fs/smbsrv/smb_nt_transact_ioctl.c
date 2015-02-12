@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <smbsrv/smb_kproto.h>
@@ -187,7 +187,7 @@ smb_nt_trans_ioctl_set_sparse(smb_request_t *sr, smb_xa_t *xa)
 	 */
 	bzero(&attr, sizeof (smb_attr_t));
 	attr.sa_mask = SMB_AT_DOSATTR;
-	rc = smb_node_getattr(sr, of->f_node, kcred, of, &attr);
+	rc = smb_node_getattr(sr, of->f_node, zone_kcred(), of, &attr);
 	if (rc != 0) {
 		smbsr_errno(sr, rc);
 		smbsr_release_file(sr);

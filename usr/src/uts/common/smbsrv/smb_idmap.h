@@ -22,13 +22,13 @@
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  *
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef _SMB_IDMAP_H
 #define	_SMB_IDMAP_H
 
-#if defined(_KERNEL) || defined(_FAKE_KERNEL)
+#if defined(_KERNEL) /* intentionally not || defined(_FAKE_KERNEL) */
 #include <sys/kidmap.h>
 #else
 #include <idmap.h>

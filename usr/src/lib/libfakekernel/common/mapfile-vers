@@ -60,6 +60,7 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	ddi_get_lbolt64;
 	ddi_get_lbolt;
 	ddi_get_pid;
+	ddi_strtoul;
 
 	delay;
 

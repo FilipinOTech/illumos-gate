@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -66,17 +66,22 @@ mlsvc_netlogon(char *server, char *domain)
 	mlsvc_handle_t netr_handle;
 	DWORD status;
 
-	if (netr_open(server, domain, &netr_handle) == 0) {
-		if ((status = netlogon_auth(server, &netr_handle,
-		    NETR_FLG_INIT)) != NT_STATUS_SUCCESS)
-			syslog(LOG_NOTICE, "Failed to establish NETLOGON "
-			    "credential chain");
-		(void) netr_close(&netr_handle);
-	} else {
+	if (netr_open(server, domain, &netr_handle) != 0) {
 		syslog(LOG_NOTICE, "Failed to connect to %s "
 		    "for domain %s", server, domain);
-		status = NT_STATUS_CANT_ACCESS_DOMAIN_INFO;
+		return (NT_STATUS_CANT_ACCESS_DOMAIN_INFO);
 	}
+
+	status = netlogon_auth(server, &netr_handle, NETR_FLG_INIT);
+	if (status != NT_STATUS_SUCCESS) {
+		syslog(LOG_NOTICE, "Failed to establish NETLOGON "
+		    "credential chain with DC: %s (%s)", server,
+		    xlate_nt_status(status));
+		syslog(LOG_NOTICE, "The machine account information on the "
+		    "domain controller does not match the local storage.");
+		syslog(LOG_NOTICE, "To correct this, use 'smbadm join'");
+	}
+	(void) netr_close(&netr_handle);
 
 	return (status);
 }
@@ -94,13 +99,15 @@ mlsvc_netlogon(char *server, char *domain)
  *
  * Returns NT status codes.
  */
-DWORD
-mlsvc_join(smb_domainex_t *dxi, char *admin_user, char *admin_pw)
+void
+mlsvc_join(smb_joininfo_t *info, smb_joinres_t *res)
 {
+	static unsigned char zero_hash[SMBAUTH_HASH_SZ];
 	char machine_name[SMB_SAMACCT_MAXLEN];
 	char machine_pw[NETR_MACHINE_ACCT_PASSWD_MAX];
 	unsigned char passwd_hash[SMBAUTH_HASH_SZ];
-	smb_domain_t *di = &dxi->d_primary;
+	smb_domainex_t dxi;
+	smb_domain_t *di = &dxi.d_primary;
 	DWORD status;
 	int rc;
 
@@ -113,21 +120,63 @@ mlsvc_join(smb_domainex_t *dxi, char *admin_user, char *admin_pw)
 	 */
 	boolean_t ads_enabled = smb_config_get_ads_enable();
 
-	if (smb_getsamaccount(machine_name, sizeof (machine_name)) != 0)
-		return (NT_STATUS_INTERNAL_ERROR);
+	if (smb_getsamaccount(machine_name, sizeof (machine_name)) != 0) {
+		res->status = NT_STATUS_INVALID_COMPUTER_NAME;
+		return;
+	}
 
 	(void) smb_gen_random_passwd(machine_pw, sizeof (machine_pw));
 
 	/*
+	 * Ensure that any previous membership of this domain has
+	 * been cleared from the environment before we start. This
+	 * will ensure that we don't attempt a NETLOGON_SAMLOGON
+	 * when attempting to find the PDC.
+	 */
+	(void) smb_config_setbool(SMB_CI_DOMAIN_MEMB, B_FALSE);
+
+	/*
+	 * Use a NULL session while searching for a DC, and
+	 * while getting information about the domain.
+	 */
+	smb_ipc_set(MLSVC_ANON_USER, zero_hash);
+
+	/*
+	 * Tentatively set the idmap domain to the one we're joining,
+	 * so that the DC locator in idmap knows what to look for.
+	 * Ditto the SMB server domain.
+	 */
+	if (smb_config_set_idmap_domain(info->domain_name) != 0)
+		syslog(LOG_NOTICE, "Failed to set idmap domain name");
+	if (smb_config_refresh_idmap() != 0)
+		syslog(LOG_NOTICE, "Failed to refresh idmap service");
+
+	/* Clear DNS local (ADS) lookup cache. */
+	/* XXX: or smb_ddiscover_refresh? */
+	smb_ads_refresh(B_FALSE);
+
+	/*
+	 * This tells the smb_ddiscover_service to go find the DC.
+	 * Does IPC to the DC Locator in idmap, fills in dxi.
+	 */
+	if (!smb_locate_dc(info->domain_name, &dxi)) {
+		syslog(LOG_ERR, "smbd: failed locating "
+		    "domain controller for %s",
+		    info->domain_name);
+		status = NT_STATUS_DOMAIN_CONTROLLER_NOT_FOUND;
+		goto out;
+	}
+
+	/*
 	 * A non-null user means we do "secure join".
 	 */
-	if (admin_user != NULL && admin_user[0] != '\0') {
+	if (info->domain_username[0] != '\0') {
 		/*
 		 * Doing "secure join", so authenticate as the
 		 * specified user (with admin. rights).
 		 */
-		(void) smb_auth_ntlm_hash(admin_pw, passwd_hash);
-		smb_ipc_set(admin_user, passwd_hash);
+		(void) smb_auth_ntlm_hash(info->domain_passwd, passwd_hash);
+		smb_ipc_set(info->domain_username, passwd_hash);
 
 		/*
 		 * If enabled, try to join using AD Services.
@@ -135,23 +184,27 @@ mlsvc_join(smb_domainex_t *dxi, char *admin_user, char *admin_pw)
 		 */
 		status = NT_STATUS_UNSUCCESSFUL;
 		if (ads_enabled) {
-			smb_adjoin_status_t err;
-			err = smb_ads_join(di->di_fqname,
-			    admin_user, admin_pw, machine_pw);
+			res->join_err = smb_ads_join(di->di_fqname,
+			    info->domain_username, info->domain_passwd,
+			    machine_pw);
+			if (res->join_err == SMB_ADS_SUCCESS) {
+				status = NT_STATUS_SUCCESS;
+			}
 			if (err != SMB_ADJOIN_SUCCESS) {
 				smb_ads_join_errmsg(err);
 			} else {
 				status = NT_STATUS_SUCCESS;
 			}
-		}
+		} else {
+			syslog(LOG_DEBUG, "use_ads=false (do RPC join)");
 
 		/*
 		 * If ADS was disabled or gave an error,
 		 * fall-back and try to join using RPC.
 		 */
-		if (status != NT_STATUS_SUCCESS) {
-			status = mlsvc_join_rpc(dxi,
-			    admin_user, admin_pw,
+			status = mlsvc_join_rpc(&dxi,
+			    info->domain_username,
+			    info->domain_passwd,
 			    machine_name, machine_pw);
 		}
 
@@ -162,7 +215,7 @@ mlsvc_join(smb_domainex_t *dxi, char *admin_user, char *admin_pw)
 		bzero(passwd_hash, sizeof (passwd_hash));
 		smb_ipc_set(MLSVC_ANON_USER, passwd_hash);
 
-		status = mlsvc_join_noauth(dxi, machine_name, machine_pw);
+		status = mlsvc_join_noauth(&dxi, machine_name, machine_pw);
 	}
 
 	if (status != NT_STATUS_SUCCESS)
@@ -174,11 +227,12 @@ mlsvc_join(smb_domainex_t *dxi, char *admin_user, char *admin_pw)
 	 */
 	(void) smb_auth_ntlm_hash(machine_pw, passwd_hash);
 	smb_ipc_set(machine_name, passwd_hash);
-	rc = smbrdr_logon(dxi->d_dc, di->di_nbname, machine_name);
+	rc = smbrdr_logon(dxi.d_dci.dc_name, di->di_nbname, machine_name);
 	if (rc != 0) {
 		syslog(LOG_NOTICE, "Authenticate with "
 		    "new/updated machine account: %s",
 		    strerror(rc));
+		res->join_err = SMB_ADJOIN_ERR_AUTH_NETLOGON;
 		status = NT_STATUS_CANT_ACCESS_DOMAIN_INFO;
 		goto out;
 	}
@@ -186,16 +240,18 @@ mlsvc_join(smb_domainex_t *dxi, char *admin_user, char *admin_pw)
 	/*
 	 * Store the new machine account password.
 	 */
-	rc = smb_setdomainprops(NULL, dxi->d_dc, machine_pw);
+	rc = smb_setdomainprops(NULL, dxi.d_dci.dc_name, machine_pw);
 	if (rc != 0) {
 		syslog(LOG_NOTICE,
 		    "Failed to save machine account password");
+		res->join_err = SMB_ADJOIN_ERR_STORE_PROPS;
 		status = NT_STATUS_INTERNAL_DB_ERROR;
 		goto out;
 	}
 
 	/*
-	 * Update idmap config
+	 * Update idmap config?
+	 * Already set the domain_name above.
 	 */
 	if (smb_config_set_idmap_domain(di->di_fqname) != 0)
 		syslog(LOG_NOTICE, "Failed to set idmap domain name");
@@ -207,13 +263,34 @@ mlsvc_join(smb_domainex_t *dxi, char *admin_user, char *admin_pw)
 	 * domain info (via smb_config_setdomaininfo) and
 	 * and does smb_ipc_commit (or rollback).
 	 */
+	/*
+	 * Save the SMB server config.  Sets: SMB_CI_DOMAIN_*
+	 * Should unify SMB vs idmap configs.
+	 */
+	smb_config_setdomaininfo(di->di_nbname, di->di_fqname,
+	    di->di_sid,
+	    di->di_u.di_dns.ddi_forest,
+	    di->di_u.di_dns.ddi_guid);
+	smb_ipc_commit();
+
 	status = 0;
 
 out:
+
+	if (status != 0) {
+		/*
+		 * Undo the tentative domain settings.
+		 */
+		(void) smb_config_set_idmap_domain("");
+		(void) smb_config_refresh_idmap();
+		smb_ipc_rollback();
+	}
+
 	/* Avoid leaving cleartext passwords around. */
 	bzero(machine_pw, sizeof (machine_pw));
 	bzero(passwd_hash, sizeof (passwd_hash));
 
+	res->status = status;
 	return (status);
 }
 
@@ -226,7 +303,7 @@ mlsvc_join_rpc(smb_domainex_t *dxi,
 	mlsvc_handle_t domain_handle;
 	mlsvc_handle_t user_handle;
 	smb_account_t ainfo;
-	char *server = dxi->d_dc;
+	char *server = dxi->d_dci.dc_name;
 	smb_domain_t *di = &dxi->d_primary;
 	DWORD account_flags;
 	DWORD rid;
@@ -328,7 +405,7 @@ mlsvc_join_noauth(smb_domainex_t *dxi,
 		return (NT_STATUS_INTERNAL_ERROR);
 	old_pw[14] = '\0';
 
-	status = netr_change_password(dxi->d_dc, machine_name,
+	status = netr_change_password(dxi->d_dci.dc_name, machine_name,
 	    old_pw, machine_pw);
 	if (status != NT_STATUS_SUCCESS) {
 		syslog(LOG_NOTICE,

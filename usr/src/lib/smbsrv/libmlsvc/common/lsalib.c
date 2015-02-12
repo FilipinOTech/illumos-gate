@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -352,7 +353,7 @@ lsa_lookup_name_domain(char *account_name, smb_account_t *info)
 	if (!smb_domain_getinfo(&dinfo))
 		return (NT_STATUS_CANT_ACCESS_DOMAIN_INFO);
 
-	if (lsar_open(dinfo.d_dc, dinfo.d_primary.di_nbname, user,
+	if (lsar_open(dinfo.d_dci.dc_name, dinfo.d_primary.di_nbname, user,
 	    &domain_handle) != 0)
 		return (NT_STATUS_INVALID_PARAMETER);
 
@@ -389,7 +390,7 @@ lsa_lookup_privs(char *account_name, char *target_name, smb_account_t *ainfo)
 	if (!smb_domain_getinfo(&dinfo))
 		return (-1);
 
-	if ((lsar_open(dinfo.d_dc, dinfo.d_primary.di_nbname, user,
+	if ((lsar_open(dinfo.d_dci.dc_name, dinfo.d_primary.di_nbname, user,
 	    &domain_handle)) != 0)
 		return (-1);
 
@@ -535,7 +536,7 @@ lsa_lookup_sid_domain(smb_sid_t *sid, smb_account_t *ainfo)
 	if (!smb_domain_getinfo(&dinfo))
 		return (NT_STATUS_CANT_ACCESS_DOMAIN_INFO);
 
-	if (lsar_open(dinfo.d_dc, dinfo.d_primary.di_nbname, user,
+	if (lsar_open(dinfo.d_dci.dc_name, dinfo.d_primary.di_nbname, user,
 	    &domain_handle) != 0)
 		return (NT_STATUS_INVALID_PARAMETER);
 

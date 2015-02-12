@@ -20,7 +20,7 @@
 #
 #
 # Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
 #
 
 LIBRARY= libsmb.a
@@ -78,9 +78,10 @@ LINTCHECKFLAGS += -erroff=E_INCONS_ARG_DECL2
 LINTCHECKFLAGS += -erroff=E_BAD_FORMAT_STR2
 
 LDLIBS +=	$(MACH_LDLIBS)
+# perfer to keep libs ordered by dependence
 LDLIBS +=	-lscf -lmd -luuid -lpkcs11 -lcryptoutil
-LDLIBS +=	-lsec -lidmap -lnsl -lsocket -lresolv
-LDLIBS +=	-lreparse -lnvpair -lcmdutils -lavl -lc
+LDLIBS +=	-lsec -lidmap -lreparse -lcmdutils -lavl
+LDLIBS +=	-lnvpair -lresolv -lsocket -lnsl -lc
 CPPFLAGS +=	$(INCS) -D_REENTRANT
 CPPFLAGS +=	-Dsyslog=smb_syslog
 CERRWARN +=	-_gcc=-Wno-uninitialized

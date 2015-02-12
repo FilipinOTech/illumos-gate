@@ -804,7 +804,7 @@ smb_config_get_ads_enable(void)
 		rc = smb_smf_get_boolean_property(handle, "use_ads", &vbool);
 	smb_smf_scf_fini(handle);
 
-	return ((rc == SMBD_SMF_OK) ? (vbool == 1) : B_FALSE);
+	return ((rc == SMBD_SMF_OK) ? (vbool == 1) : B_TRUE);
 }
 
 /*

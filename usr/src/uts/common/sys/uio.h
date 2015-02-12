@@ -23,6 +23,8 @@
  *
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2015, Joyent, Inc.  All rights reserved.
  */
 
@@ -252,8 +254,17 @@ extern	uioasync_t uioasync;
 
 #else	/* defined(_KERNEL) */
 
+#if 	defined(__STDC__)
+
 extern ssize_t readv(int, const struct iovec *, int);
 extern ssize_t writev(int, const struct iovec *, int);
+
+#else	/* defined(__STDC__) */
+
+extern ssize_t readv();
+extern ssize_t writev();
+
+#endif	/* defined(__STDC__) */
 
 /*
  * When in the large file compilation environment,

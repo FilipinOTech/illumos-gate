@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef _VNCACHE_H
@@ -22,9 +22,8 @@ extern "C" {
 
 struct stat;
 vnode_t *vncache_lookup(struct stat *);
-
 vnode_t *vncache_enter(struct stat *, vnode_t *, char *, int);
-
+void	vncache_renamed(vnode_t *, vnode_t *, char *);
 void 	vncache_inactive(vnode_t *);
 int 	vncache_cmp(const void *, const void *);
 

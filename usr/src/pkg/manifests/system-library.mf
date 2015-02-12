@@ -20,7 +20,6 @@
 #
 
 #
-# Copyright 2014 Nexenta Systems, Inc.
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2012 OmniTI Computer Consulting, Inc.  All rights reserved.
 # Copyright (c) 2013 Gary Mills

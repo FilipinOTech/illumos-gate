@@ -33,7 +33,7 @@ static void
 smb_svc_log(int pri, const char *fmt, va_list ap)
 {
 	static time_t prev_ts;
-	char fbuf[SMB_LOG_LINE_SZ];
+	char fbuf[SMBD_LOG_MSGSIZE];
 	char cbuf[CBUFSIZ];
 	char *newfmt;
 	time_t ts;

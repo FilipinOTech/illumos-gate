@@ -52,6 +52,8 @@ pid$target:libads.so.1::entry
   printf("\t0x%x", arg1);
   printf("\t0x%x", arg2);
   printf("\t0x%x", arg3);
+  printf("\t0x%x", arg4);
+  printf("\t0x%x", arg5);
 }
 
 pid$target:libsmb.so.1:smb_trace:entry
@@ -85,6 +87,27 @@ pid$target::smb_strupr:entry,
 pid$target::smb_wcequiv_strlen:entry
 {
   self->mask++;
+}
+
+/*
+ * Get some of the smbd debug messages, etc.
+ */
+pid$target:libsmb.so.1:smb_trace:entry
+/self->trace > 0 && self->mask == 0/
+{
+  printf("%s", copyinstr(arg0));
+}
+
+pid$target:libsmb.so.1:smb_syslog:entry
+/self->trace > 0 && self->mask == 0/
+{
+  printf("%s", copyinstr(arg1));
+}
+
+pid$target:libc_hwcap1.so.1:syslog:entry
+/self->trace > 0 && self->mask == 0/
+{
+  printf("%s", copyinstr(arg1));
 }
 
 /*

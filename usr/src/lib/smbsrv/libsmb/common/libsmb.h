@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2012, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef	_LIBSMB_H
@@ -195,6 +195,7 @@ extern int smb_config_setnum(smb_cfg_id_t, int64_t);
 extern int smb_config_setbool(smb_cfg_id_t, boolean_t);
 
 extern boolean_t smb_config_get_ads_enable(void);
+extern int smb_config_get_debug(void);
 extern uint8_t smb_config_get_fg_flag(void);
 extern char *smb_config_get_localsid(void);
 extern int smb_config_get_localuuid(uuid_t);
@@ -518,8 +519,6 @@ boolean_t smb_auth_validate(smb_passwd_t *, char *, char *,
 
 int smb_gen_random_passwd(char *passwd, size_t bufsz);
 
-int smb_gen_random_passwd(char *passwd, size_t bufsz);
-
 /*
  * SMB authenticated IPC
  */
@@ -620,6 +619,11 @@ typedef struct smb_trusted_domains {
 #define	SMB_DOMAIN_NO_MEMORY		6
 #define	SMB_DOMAIN_NO_CACHE		7
 
+typedef struct smb_dcinfo {
+	char			dc_name[MAXHOSTNAMELEN];
+	smb_inaddr_t		dc_addr;
+} smb_dcinfo_t;
+
 /*
  * This structure could contain information about
  * the primary domain the name of selected domain controller
@@ -629,7 +633,7 @@ typedef struct smb_trusted_domains {
  * which only contains information about a single domain.
  */
 typedef struct smb_domainex {
-	char			d_dc[MAXHOSTNAMELEN];
+	smb_dcinfo_t		d_dci;
 	smb_domain_t		d_primary;
 	smb_trusted_domains_t	d_trusted;
 } smb_domainex_t;
@@ -650,7 +654,7 @@ void smb_domain_set_dns_info(char *, char *, char *, char *, char *,
     smb_domain_t *);
 void smb_domain_set_trust_info(char *, char *, char *,
     uint32_t, uint32_t, uint32_t, smb_domain_t *);
-void smb_domain_current_dc(char *buf, size_t len);
+void smb_domain_current_dc(smb_dcinfo_t *);
 
 typedef struct smb_gsid {
 	smb_sid_t *gs_sid;

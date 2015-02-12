@@ -236,6 +236,7 @@ smb2_negotiate_common(smb_request_t *sr, uint16_t dialect)
 	if (sr->sr_cfg->skc_signing_required)
 		secmode |= SMB2_NEGOTIATE_SIGNING_REQUIRED;
 	s->secmode = secmode;
+	s->cmd_max_bytes = smb2_tcp_rcvbuf;
 	s->reply_max_bytes = smb2_tcp_sndbuf;
 	(void) microtime(&server_time);
 

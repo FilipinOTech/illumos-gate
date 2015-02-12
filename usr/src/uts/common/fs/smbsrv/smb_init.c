@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/types.h>
@@ -78,8 +78,10 @@ uint_t	smb_audit_flags =
 #endif
 
 /*
- * Maximum number of simultaneous share mapping, pipe open requests allowed.
+ * Maximum number of simultaneous authentication, share mapping, pipe open
+ * requests to be processed.
  */
+int	smb_ssetup_threshold = SMB_AUTHSVC_MAXTHREAD;
 int	smb_tcon_threshold = 1024;
 int	smb_opipe_threshold = 1024;
 

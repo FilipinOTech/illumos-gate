@@ -23,9 +23,19 @@
  * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
-#include <syslog.h>
-#include <strings.h>
-#include <smbsrv/libsmb.h>
+/*
+ * This file is somewhere between:
+ * $SRC/lib/smbsrv/libsmb/common/smb_idmap.c
+ * $SRC/uts/common/fs/smbsrv/smb_idmap.c
+ *
+ * Could try to unify all three.
+ */
+
+#include <sys/param.h>
+#include <sys/types.h>
+
+#include <smbsrv/smb_kproto.h>
+#include <smbsrv/smb_idmap.h>
 
 static int smb_idmap_batch_binsid(smb_idmap_batch_t *sib);
 
@@ -39,7 +49,7 @@ smb_idmap_check(const char *s, idmap_stat stat)
 		if (s == NULL)
 			s = "smb_idmap_check";
 
-		syslog(LOG_ERR, "%s: %s", s, idmap_stat2string(stat));
+		cmn_err(CE_NOTE, "%s: %d", s, (int)stat);
 	}
 }
 
@@ -142,11 +152,8 @@ smb_idmap_batch_create(smb_idmap_batch_t *sib, uint16_t nmap, int flags)
 	sib->sib_flags = flags;
 	sib->sib_nmap = nmap;
 	sib->sib_size = nmap * sizeof (smb_idmap_t);
-	sib->sib_maps = malloc(sib->sib_size);
-	if (!sib->sib_maps)
-		return (IDMAP_ERR_MEMORY);
+	sib->sib_maps = kmem_zalloc(sib->sib_size, KM_SLEEP);
 
-	bzero(sib->sib_maps, sib->sib_size);
 	return (IDMAP_SUCCESS);
 }
 
@@ -178,12 +185,13 @@ smb_idmap_batch_destroy(smb_idmap_batch_t *sib)
 		 */
 		for (i = 0; i < sib->sib_nmap; i++) {
 			smb_sid_free(sib->sib_maps[i].sim_sid);
+			/* from strdup() in libidmap */
 			free(sib->sib_maps[i].sim_domsid);
 		}
 	}
 
 	if (sib->sib_size && sib->sib_maps) {
-		free(sib->sib_maps);
+		kmem_free(sib->sib_maps, sib->sib_size);
 		sib->sib_maps = NULL;
 	}
 }
@@ -238,7 +246,6 @@ smb_idmap_batch_getid(idmap_get_handle_t *idmaph, smb_idmap_t *sim,
 
 	default:
 		stat = IDMAP_ERR_ARG;
-		break;
 	}
 
 	/* This was copied by idmap_get_Xbysid. */
@@ -336,8 +343,10 @@ smb_idmap_batch_getmappings(smb_idmap_batch_t *sib)
 	for (i = 0, sim = sib->sib_maps; i < sib->sib_nmap; i++, sim++) {
 		if (sim->sim_stat != IDMAP_SUCCESS) {
 			if (sib->sib_flags == SMB_IDMAP_SID2ID) {
-				smb_tracef("[%d] %d (%d)", sim->sim_idtype,
-				    sim->sim_rid, sim->sim_stat);
+				cmn_err(CE_NOTE, "[%d] %d (%d)",
+				    sim->sim_idtype,
+				    sim->sim_rid,
+				    sim->sim_stat);
 			}
 			return (sim->sim_stat);
 		}

@@ -116,9 +116,15 @@ adspriv_getdcname_1_svc(
 	if ((args.Flags & DS_BACKGROUND_ONLY) == 0) {
 		timespec_t tv = { 15, 0 };
 		int rc = 0;
+		int waited = 0;
 
 		(void) mutex_lock(&_idmapdstate.addisc_lk);
+
+		if (_idmapdstate.addisc_st != 0)
+			idmapdlog(LOG_DEBUG, "getdcname wait begin");
+
 		while (_idmapdstate.addisc_st != 0) {
+			waited++;
 			rc = cond_reltimedwait(&_idmapdstate.addisc_cv,
 			    &_idmapdstate.addisc_lk, &tv);
 			if (rc == ETIME)
@@ -128,8 +134,12 @@ adspriv_getdcname_1_svc(
 
 		if (rc == ETIME) {
 			/* Caller will replace this with DC not found. */
+			idmapdlog(LOG_ERR, "getdcname timeout");
 			res->status = NT_STATUS_CANT_WAIT;
 			return (TRUE);
+		}
+		if (waited) {
+			idmapdlog(LOG_DEBUG, "getdcname wait done");
 		}
 	}
 

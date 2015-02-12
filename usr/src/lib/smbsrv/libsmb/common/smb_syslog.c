@@ -23,7 +23,7 @@
 #include <smbsrv/libsmb.h>
 
 /*
- * This is exported NODIRECT so that fksmbd can provide it's own.
+ * This is exported NODIRECT so that smbd can provide it's own.
  */
 void
 smb_vsyslog(int pri, const char *fmt, va_list ap)

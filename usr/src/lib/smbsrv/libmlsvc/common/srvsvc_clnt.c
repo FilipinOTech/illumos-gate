@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -62,7 +63,7 @@ srvsvc_open(char *server, char *domain, char *username, mlsvc_handle_t *handle)
 		if (!smb_domain_getinfo(&di))
 			return (-1);
 
-		server = di.d_dc;
+		server = di.d_dci.dc_name;
 		domain = di.d_primary.di_nbname;
 	}
 
@@ -422,8 +423,8 @@ srvsvc_timesync(void)
 	if (!smb_domain_getinfo(&di))
 		return;
 
-	if (srvsvc_net_remote_tod(di.d_dc, di.d_primary.di_nbname, &tv, &tm)
-	    != 0)
+	if (srvsvc_net_remote_tod(di.d_dci.dc_name, di.d_primary.di_nbname,
+	    &tv, &tm) != 0)
 		return;
 
 	if (settimeofday(&tv, 0))
@@ -447,8 +448,8 @@ srvsvc_gettime(unsigned long *t)
 	if (!smb_domain_getinfo(&di))
 		return (-1);
 
-	if (srvsvc_net_remote_tod(di.d_dc, di.d_primary.di_nbname, &tv, &tm)
-	    != 0)
+	if (srvsvc_net_remote_tod(di.d_dci.dc_name, di.d_primary.di_nbname,
+	    &tv, &tm) != 0)
 		return (-1);
 
 	*t = tv.tv_sec;
@@ -553,7 +554,7 @@ srvsvc_net_test(char *server, char *domain, char *netname)
 	(void) smb_tracef("%s %s %s", server, domain, netname);
 
 	if (smb_domain_getinfo(&di)) {
-		server = di.d_dc;
+		server = di.d_dci.dc_name;
 		domain = di.d_primary.di_nbname;
 	}
 

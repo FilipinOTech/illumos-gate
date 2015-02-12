@@ -28,9 +28,16 @@
 #ifndef _SMB_TOKEN_H
 #define	_SMB_TOKEN_H
 
-#include <smbsrv/netrauth.h>
+#include <smbsrv/smb_inet.h>
 #include <smbsrv/smb_privilege.h>
 #include <smbsrv/smb_sid.h>
+
+/*
+ * Don't want <smbsrv/netrauth.h> in here, but
+ * uts/common/fs/smbsrv/smb_authenticate.c
+ * wants this.  Todo: cleanup
+ */
+#define	NETR_NETWORK_LOGON			0x02
 
 #ifdef __cplusplus
 extern "C" {
@@ -141,6 +148,13 @@ typedef struct smb_logon {
  * where the SMB auth. service listens.
  */
 #define	SMB_AUTHSVC_SOCKNAME	"/var/smb/lipc/smbauth"
+
+/*
+ * Maximum number of authentcation conversations at one time.
+ * Note this is _NOT_ the max. number of logged on users,
+ * which can be much larger.
+ */
+#define	SMB_AUTHSVC_MAXTHREAD	256
 
 /*
  * Messages to and from the local security authority

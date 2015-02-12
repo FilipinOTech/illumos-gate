@@ -158,8 +158,8 @@ smb_token_sids2ids(smb_token_t *token)
 	}
 
 	stat = smb_idmap_batch_getmappings(&sib);
-	smb_idmap_batch_destroy(&sib);
 	smb_idmap_check("smb_idmap_batch_getmappings", stat);
+	smb_idmap_batch_destroy(&sib);
 
 	return (stat == IDMAP_SUCCESS ? 0 : -1);
 }

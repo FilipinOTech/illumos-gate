@@ -511,11 +511,25 @@ fop_rename(
 	caller_context_t *ct,
 	int flags)
 {
+	struct stat st;
+	vnode_t *vp;
 	int err;
+
+	if (fstatat(from_dvp->v_fd, from_name, &st,
+	    AT_SYMLINK_NOFOLLOW) == -1)
+		return (errno);
+
+	vp = vncache_lookup(&st);
+	if (vp == NULL)
+		return (ENOENT);
 
 	err = renameat(from_dvp->v_fd, from_name, to_dvp->v_fd, to_name);
 	if (err == -1)
 		err = errno;
+	else
+		vncache_renamed(vp, to_dvp, to_name);
+
+	vn_rele(vp);
 
 	return (err);
 }

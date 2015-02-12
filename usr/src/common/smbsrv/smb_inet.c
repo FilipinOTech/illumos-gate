@@ -21,15 +21,19 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
  * This file was originally generated using rpcgen.
  */
 
-#ifndef _KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 #include <string.h>
 #include <stdlib.h>
+#endif /* !_KERNEL && !_FAKE_KERNEL */
+#if !defined(_KERNEL)
 #include <arpa/inet.h>
 #endif /* !_KERNEL */
 #include <sys/types.h>

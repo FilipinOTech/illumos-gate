@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/types.h>
@@ -22,6 +22,7 @@
 #include <sys/poll.h>
 
 #include <time.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 #include <fakekernel.h>
@@ -50,6 +51,13 @@ pid_t
 ddi_get_pid(void)
 {
 	return ((pid_t)getpid());
+}
+
+int
+ddi_strtoul(const char *str, char **endp, int base, unsigned long *res)
+{
+	*res = strtoul(str, endp, base);
+	return (0);
 }
 
 void

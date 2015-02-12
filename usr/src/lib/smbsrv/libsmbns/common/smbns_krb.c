@@ -60,8 +60,9 @@
 #include <smbns_krb.h>
 
 int
-smb_kinit(char *principal_name, char *principal_passwd)
+smb_kinit(char *domain_name, char *principal_name, char *principal_passwd)
 {
+	char default_realm[MAXHOSTNAMELEN];
 	krb5_context ctx = NULL;
 	krb5_ccache cc = NULL;
 	krb5_principal me = NULL;
@@ -87,6 +88,13 @@ smb_kinit(char *principal_name, char *principal_passwd)
 		doing = "smbns_krb: initializing context";
 		goto cleanup;
 	}
+
+	/*
+	 * In case krb5.conf is not configured, set the default realm.
+	 */
+	(void) strlcpy(default_realm, domain_name, sizeof (default_realm));
+	(void) smb_strupr(default_realm);
+	(void) krb5_set_default_realm(ctx, default_realm);
 
 	code = krb5_cc_default(ctx, &cc);
 	if (code != 0) {

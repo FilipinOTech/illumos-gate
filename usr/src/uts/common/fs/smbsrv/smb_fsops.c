@@ -1474,6 +1474,7 @@ smb_fsop_write(
 	vnode_t *u_vp = NULL;
 	smb_ofile_t *of;
 	vnode_t *vp;
+	cred_t *kcr = zone_kcred();
 	int svmand;
 	int rc;
 
@@ -1512,11 +1513,11 @@ smb_fsop_write(
 		ASSERT(u_node->n_magic == SMB_NODE_MAGIC);
 		ASSERT(u_node->n_state != SMB_NODE_STATE_DESTROYING);
 		u_vp = u_node->vp;
-		cr = kcred;
+		cr = kcr;
 	}
 
 	smb_node_start_crit(snode, RW_WRITER);
-	rc = nbl_svmand(vp, kcred, &svmand);
+	rc = nbl_svmand(vp, kcr, &svmand);
 	if (rc) {
 		smb_node_end_crit(snode);
 		return (rc);
@@ -1548,7 +1549,7 @@ smb_fsop_write(
 	if (of->f_pending_attr.sa_mask & SMB_AT_MTIME) {
 		bcopy(&of->f_pending_attr, &attr, sizeof (attr));
 		attr.sa_mask = SMB_AT_MTIME;
-		(void) smb_vop_setattr(vp, u_vp, &attr, 0, kcred);
+		(void) smb_vop_setattr(vp, u_vp, &attr, 0, kcr);
 	}
 
 	smb_node_end_crit(snode);

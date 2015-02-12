@@ -31,6 +31,7 @@ VERS =		.1
 OBJS_LOCAL = \
 		fksmb_cred.o \
 		fksmb_fem.o \
+		fksmb_idmap.o \
 		fksmb_init.o \
 		fksmb_kdoor.o \
 		fake_lookup.o \
@@ -149,10 +150,22 @@ OBJS_FS_SMBSRV = \
 		smb2_tree_disconn.o \
 		smb2_write.o
 
-# Most files from $SRC/common/smbsrv are built in libsmb
+# Can't just link with -lsmb because of user vs kernel API
+# i.e. can't call free with mem from kmem_alloc, which is
+# what happens if we just link with -lsmb
 OBJS_CMN_SMBSRV = \
+		smb_inet.o \
 		smb_match.o \
-		smb_netbios_util.o
+		smb_msgbuf.o \
+		smb_native.o \
+		smb_netbios_util.o \
+		smb_oem.o \
+		smb_sid.o \
+		smb_string.o \
+		smb_token.o \
+		smb_token_xdr.o \
+		smb_utf8.o \
+		smb_xdr.o
 
 OBJS_MISC = \
 		acl_common.o \
@@ -191,7 +204,7 @@ LINTCHECKFLAGS += -erroff=E_INCONS_VAL_TYPE_DECL2
 LINTCHECKFLAGS += -erroff=E_INCONS_VAL_TYPE_USED2
 
 LDLIBS +=	$(MACH_LDLIBS)
-LDLIBS +=	-lfakekernel -lsmb -lcmdutils
+LDLIBS +=	-lfakekernel -lidmap -lcmdutils
 LDLIBS +=	-lavl -lnvpair -lnsl -lmd -lreparse -lc
 
 CPPFLAGS += $(INCS) -D_REENTRANT -D_FAKE_KERNEL

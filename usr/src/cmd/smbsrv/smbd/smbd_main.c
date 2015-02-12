@@ -200,7 +200,7 @@ main(int argc, char *argv[])
 			break;
 
 		case SIGUSR1:
-			syslog(LOG_DEBUG, "log dump requested");
+			syslog(LOG_DEBUG, "SIGUSR1 ignored, log dump requested");
 			smb_log_dumpall();
 			break;
 
@@ -670,6 +670,7 @@ smbd_online_wait(const char *text)
 		(void) sleep(SMBD_ONLINE_WAIT_INTERVAL);
 
 	if (text != NULL) {
+		syslog(LOG_DEBUG, "%s: online", text);
 		smb_log(smbd.s_loghd, LOG_DEBUG, "%s: online", text);
 		(void) fprintf(stderr, "%s: online\n", text);
 	}

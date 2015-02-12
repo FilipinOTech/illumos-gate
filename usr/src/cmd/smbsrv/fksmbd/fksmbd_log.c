@@ -39,7 +39,7 @@ void
 smb_vsyslog(int pri, const char *fmt, va_list ap)
 {
 	int save_errno = errno;
-	char buf[SMB_LOG_LINE_SZ];
+	char buf[SMBD_LOG_MSGSIZE];
 	char *newfmt;
 
 	pri &= LOG_PRIMASK;

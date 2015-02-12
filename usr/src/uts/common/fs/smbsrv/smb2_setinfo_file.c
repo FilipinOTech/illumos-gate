@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -118,9 +118,12 @@ smb2_setf_rename(smb_request_t *sr, smb_setinfo_t *si)
 	}
 
 	rc = smb_setinfo_rename(sr, si->si_node, fname, flags);
-	if (rc != 0)
+	if (rc != 0) {
 		status = smb_errno2status(rc);
+		return (status);
+	}
 
+	status = smb_setinfo_rename(sr, si->si_node, fname, flags);
 	return (status);
 }
 
@@ -152,9 +155,12 @@ smb2_setf_link(smb_request_t *sr, smb_setinfo_t *si)
 
 	/* like smb_setinfo_rename() */
 	rc = smb_setinfo_rename(sr, si->si_node, fname, flags);
-	if (rc != 0)
+	if (rc != 0) {
 		status = smb_errno2status(rc);
+		return (status);
+	}
 
+	status = smb_setinfo_link(sr, si->si_node, fname, flags);
 	return (status);
 }
 

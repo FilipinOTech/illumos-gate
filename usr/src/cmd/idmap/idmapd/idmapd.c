@@ -58,6 +58,8 @@
 #include <assert.h>
 #include <note.h>
 
+#define	CBUFSIZ 26	/* ctime(3c) */
+
 static void	term_handler(int);
 static void	init_idmapd();
 static void	fini_idmapd();
@@ -362,6 +364,7 @@ init_idmapd()
 	 */
 	(void) unlink(IDMAP_CACHEDIR "/ccache");
 	(void) putenv("KRB5CCNAME=" IDMAP_CACHEDIR "/ccache");
+	(void) putenv("MS_INTEROP=1");
 
 	if (sysinfo(SI_HOSTNAME, _idmapdstate.hostname,
 	    sizeof (_idmapdstate.hostname)) == -1) {
@@ -519,7 +522,18 @@ restore_svc(void)
 /* printflike */
 void
 idmapdlog(int pri, const char *format, ...) {
+	static time_t prev_ts;
 	va_list args;
+	char cbuf[CBUFSIZ];
+	time_t ts;
+
+	ts = time(NULL);
+	if (prev_ts != ts) {
+		prev_ts = ts;
+		/* NB: cbuf has \n */
+		(void) fprintf(stderr, "@ %s",
+		    ctime_r(&ts, cbuf, sizeof (cbuf)));
+	}
 
 	va_start(args, format);
 	(void) vfprintf(stderr, format, args);

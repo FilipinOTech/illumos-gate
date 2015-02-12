@@ -59,7 +59,9 @@ uint32_t lsa_lookup_sid(smb_sid_t *, smb_account_t *);
  * information.
  */
 
-extern boolean_t smb_locate_dc(char *, char *, smb_domainex_t *);
+extern boolean_t smb_locate_dc(char *, smb_domainex_t *);
+extern void smb_ddiscover_bad_dc(char *);
+extern void smb_ddiscover_refresh(void);
 extern int smb_ddiscover_wait(void);
 
 extern int dssetup_check_service(void);

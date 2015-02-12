@@ -1,0 +1,17 @@
+
+Don't upstream this file	"%Z%%M%	%I%	%E% GWR"
+nor any of the commits that modify this.
+
+I'm using this to create "marker" commits, that I use
+sort of like tags, but unlike tags in that they stay
+in the correct sequence through rebase actions.
+
+Fixes before start of Zones work.
+Fixes after zones work.
+Before user-mode SMB server
+Before AF_UNIX pipes for RPC
+Before extended security
+Before first commit of SMB2 support.
+Before new DC locator etc.
+Before Kerberos inbound
+End marker

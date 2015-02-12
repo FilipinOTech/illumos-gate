@@ -25,7 +25,7 @@
 # Copyright (c) 2012, Igor Kozhukhov <ikozhukhov@gmail.com>
 # Copyright 2012 OmniTI Computer Consulting, Inc.  All rights reserved.
 # Copyright (c) 2013 RackTop Systems.
-# Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
 
@@ -270,6 +270,10 @@ DIRS= \
 	/usr/lib/gss \
 	/usr/lib/hal \
 	/usr/lib/inet \
+	/usr/lib/inet/dhcp \
+	/usr/lib/inet/dhcp/nsu \
+	/usr/lib/inet/dhcp/svc \
+	/usr/lib/inet/dhcp/svcadm \
 	/usr/lib/inet/ilb \
 	/usr/lib/inet/$(MACH32) \
 	/usr/lib/inet/wanboot \

@@ -46,7 +46,7 @@ _DsForceRediscovery(char *domain, int flags)
 	if (clnt == NULL)
 		return (RPC_S_NOT_LISTENING);
 
-	clstat = clnt_call(clnt, ADSPRIV_GetDcName,
+	clstat = clnt_call(clnt, ADSPRIV_ForceRediscovery,
 	    (xdrproc_t)xdr_DsForceRediscoveryArgs, (caddr_t)&args,
 	    (xdrproc_t)xdr_int, (caddr_t)&res, TIMEOUT);
 

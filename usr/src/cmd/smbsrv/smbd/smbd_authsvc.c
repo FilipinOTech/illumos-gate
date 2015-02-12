@@ -81,8 +81,18 @@ static int smbd_raw_ntlmssp_esnext(authsvc_context_t *);
 int smbd_authsvc_bufsize = 65000;
 
 static mutex_t smbd_authsvc_mutex = DEFAULTMUTEX;
-int smbd_authsvc_thrcnt = 0;
-int smbd_authsvc_maxthread = 200;
+
+/*
+ * The maximum number of authentication thread is limited by the
+ * smbsrv smb_threshold_...(->sv_ssetup_ct) mechanism.  However,
+ * due to occasional delays closing these auth. sockets, we need
+ * a little "slack" on the number of threads we'll allow, as
+ * compared with the in-kernel limit.  We could perhaps just
+ * remove this limit now, but want it for extra safety.
+ */
+int smbd_authsvc_maxthread = SMB_AUTHSVC_MAXTHREAD + 32;
+int smbd_authsvc_thrcnt = 0;	/* current thrcnt */
+int smbd_authsvc_hiwat = 0;	/* largest thrcnt seen */
 #ifdef DEBUG
 int smbd_authsvc_slowdown = 0;
 #endif
@@ -251,6 +261,8 @@ smbd_authsvc_listen(void *arg)
 			continue;
 		}
 		smbd_authsvc_thrcnt++;
+		if (smbd_authsvc_hiwat < smbd_authsvc_thrcnt)
+			smbd_authsvc_hiwat = smbd_authsvc_thrcnt;
 		(void) mutex_unlock(&smbd_authsvc_mutex);
 
 		ctx = smbd_authctx_create();
@@ -285,12 +297,15 @@ out:
 static void
 smbd_authsvc_flood(void)
 {
+	static uint_t count;
 	static time_t last_report;
 	time_t now = time(NULL);
 
+	count++;
 	if (last_report + 60 < now) {
 		last_report = now;
-		smbd_report("authsvc: flooded");
+		smbd_report("authsvc: flooded %u", count);
+		count = 0;
 	}
 }
 

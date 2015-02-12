@@ -107,6 +107,7 @@ extern smbd_t smbd;
 
 #define	SMBD_LOGNAME		"smbd"
 #define	SMBD_LOGSIZE		1024
+#define	SMBD_LOG_MSGSIZE	256
 
 #define	SMBD_DOOR_NAMESZ	16
 

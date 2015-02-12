@@ -30,7 +30,10 @@
 #include <unistd.h>
 #include <string.h>
 #include <strings.h>
+#include <errno.h>
 #include <sys/errno.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 
 #include <smbsrv/libsmb.h>
 #include <smbsrv/libsmbns.h>
@@ -49,9 +52,10 @@ static cond_t smbd_dc_cv;
 
 static void *smbd_dc_monitor(void *);
 static void smbd_dc_update(void);
+static int smbd_dc_check(smb_domainex_t *);
 /* Todo: static boolean_t smbd_set_netlogon_cred(void); */
-static uint32_t smbd_join_workgroup(smb_joininfo_t *);
-static uint32_t smbd_join_domain(smb_joininfo_t *);
+static void smbd_join_workgroup(smb_joininfo_t *, smb_joinres_t *);
+static void smbd_join_domain(smb_joininfo_t *, smb_joinres_t *);
 
 /*
  * Launch the DC discovery and monitor thread.
@@ -89,6 +93,8 @@ smbd_dc_monitor_refresh(void)
 
 	syslog(LOG_INFO, "smbd_dc_monitor_refresh");
 
+	smb_ddiscover_refresh();
+
 	(void) mutex_lock(&smbd_dc_mutex);
 
 	smbd.s_pdc_changed = B_TRUE;
@@ -101,13 +107,15 @@ smbd_dc_monitor_refresh(void)
 static void *
 smbd_dc_monitor(void *arg)
 {
+	smb_domainex_t	di;
 	boolean_t	ds_not_responding;
 	boolean_t	ds_cfg_changed;
 	timestruc_t	delay;
 	int		i;
 
-	smbd_dc_update();
+	/* Wait for smb_dclocator_init() to complete. */
 	smbd_online_wait("smbd_dc_monitor");
+	smbd_dc_update();
 
 	while (smbd_online()) {
 		ds_not_responding = B_FALSE;
@@ -121,15 +129,28 @@ smbd_dc_monitor(void *arg)
 		if (smbd.s_pdc_changed) {
 			smbd.s_pdc_changed = B_FALSE;
 			ds_cfg_changed = B_TRUE;
+			/* NB: smb_ddiscover_refresh was called. */
 		}
 
 		(void) mutex_unlock(&smbd_dc_mutex);
 
-		if (ds_cfg_changed)
+		if (ds_cfg_changed) {
+			syslog(LOG_DEBUG, "smbd_dc_monitor: config changed");
 			goto rediscover;
+		}
+
+		if (!smb_domain_getinfo(&di)) {
+			syslog(LOG_DEBUG, "smbd_dc_monitor: no domain info");
+			goto rediscover;
+		}
+
+		if (di.d_dci.dc_name[0] == '\0') {
+			syslog(LOG_DEBUG, "smbd_dc_monitor: no DC name");
+			goto rediscover;
+		}
 
 		for (i = 0; i < SMBD_DC_MONITOR_ATTEMPTS; ++i) {
-			if (dssetup_check_service() == 0) {
+			if (smbd_dc_check(&di) == 0) {
 				ds_not_responding = B_FALSE;
 				break;
 			}
@@ -138,19 +159,77 @@ smbd_dc_monitor(void *arg)
 			(void) sleep(SMBD_DC_MONITOR_RETRY_INTERVAL);
 		}
 
-		if (ds_not_responding)
-			smb_log(smbd.s_loghd, LOG_NOTICE,
-			    "smbd_dc_monitor: domain service not responding");
+		if (ds_not_responding) {
+			syslog(LOG_NOTICE,
+			    "smbd_dc_monitor: DC not responding: %s",
+			    di.d_dci.dc_name);
+			smb_ddiscover_bad_dc(di.d_dci.dc_name);
+		}
 
 		if (ds_not_responding || ds_cfg_changed) {
 		rediscover:
-			smb_ads_refresh(ds_not_responding);
+			/*
+			 * An smb_ads_refresh will be done by the
+			 * smb_ddiscover_service when necessary.
+			 * Note: smbd_dc_monitor_refresh was already
+			 * called if appropriate.
+			 */
 			smbd_dc_update();
 		}
 	}
 
 	smbd.s_dc_monitor_tid = 0;
 	return (NULL);
+}
+
+/*
+ * Simply attempt a connection to the DC.
+ */
+static int
+smbd_dc_check(smb_domainex_t *di)
+{
+	struct sockaddr sa;
+	int salen = 0;
+	int sock = -1;
+	int tmo = 5 * 1000;	/* 5 sec. */
+	int rc;
+
+	bzero(&sa, sizeof (sa));
+	switch (di->d_dci.dc_addr.a_family) {
+	case AF_INET: {
+		struct sockaddr_in *sin = (void *)&sa;
+		sin->sin_family = AF_INET;
+		sin->sin_port = htons(IPPORT_SMB);
+		sin->sin_addr.s_addr = di->d_dci.dc_addr.a_ipv4;
+		salen = sizeof (*sin);
+		break;
+	}
+	case AF_INET6: {
+		struct sockaddr_in6 *sin6 = (void *)&sa;
+		sin6->sin6_family = AF_INET6;
+		sin6->sin6_port = htons(IPPORT_SMB);
+		(void) memcpy(&sin6->sin6_addr,
+		    &di->d_dci.dc_addr.a_ipv6,
+		    sizeof (in6_addr_t));
+		salen = sizeof (*sin6);
+		break;
+	}
+	default:
+		return (-1);
+	}
+
+	sock = socket(di->d_dci.dc_addr.a_family, SOCK_STREAM, 0);
+	if (sock < 0)
+		return (errno);
+	(void) setsockopt(sock, IPPROTO_TCP,
+	    TCP_CONN_ABORT_THRESHOLD, &tmo, sizeof (tmo));
+
+	rc = connect(sock, &sa, salen);
+	if (rc < 0)
+		rc = errno;
+
+	(void) close(sock);
+	return (rc);
 }
 
 /*
@@ -167,41 +246,37 @@ smbd_dc_update(void)
 	smb_domain_t	*di;
 	DWORD		status;
 
-	if (smb_getfqdomainname(domain, MAXHOSTNAMELEN) != 0) {
-		(void) smb_getdomainname(domain, MAXHOSTNAMELEN);
-	}
+	/*
+	 * Don't want this active until we're a domain member.
+	 */
+	if (smb_config_get_secmode() != SMB_SECMODE_DOMAIN)
+		return;
+
+	if (smb_getfqdomainname(domain, MAXHOSTNAMELEN) != 0)
+		return;
+
 	if (domain[0] == '\0') {
-		smb_log(smbd.s_loghd, LOG_NOTICE,
+		syslog(LOG_NOTICE,
 		    "smbd_dc_update: no domain name set");
 		return;
 	}
 
-	if (!smb_locate_dc(domain, "", &info)) {
-		smb_log(smbd.s_loghd, LOG_NOTICE,
+	if (!smb_locate_dc(domain, &info)) {
+		syslog(LOG_NOTICE,
 		    "smbd_dc_update: %s: locate failed", domain);
 		return;
 	}
 
 	di = &info.d_primary;
-	smb_log(smbd.s_loghd, LOG_NOTICE,
-	    "smbd_dc_update: %s: located %s", domain, info.d_dc);
+	syslog(LOG_INFO,
+	    "smbd_dc_update: %s: located %s", domain, info.d_dci.dc_name);
 
-	status = mlsvc_netlogon(info.d_dc, di->di_nbname);
+	status = mlsvc_netlogon(info.d_dci.dc_name, di->di_nbname);
 	if (status != NT_STATUS_SUCCESS) {
 		syslog(LOG_NOTICE,
 		    "failed to establish NETLOGON credential chain");
-
-		/*
-		 * Restart required because the domain changed
-		 * or the credential chain setup failed.
-		 */
-		smb_log(smbd.s_loghd, LOG_NOTICE,
-		    "smbd_dc_update: smb/server restart required");
-
-		if (smb_smf_restart_service() != 0)
-			smb_log(smbd.s_loghd, LOG_ERR,
-			    "restart failed: run 'svcs -xv smb/server'"
-			    " for more information");
+		syslog(LOG_NOTICE, " server=%s domain=%s",
+		    info.d_dci.dc_name, domain);
 	}
 }
 
@@ -220,15 +295,15 @@ smbd_join(smb_joininfo_t *info, smb_joinres_t *res)
 	if (info->mode == SMB_SECMODE_WORKGRP)
 		smbd_join_workgroup(info, res);
 	else
-		status = smbd_join_domain(info);
-
-	return (status);
+		smbd_join_domain(info, res);
 }
 
-static uint32_t
-smbd_join_workgroup(smb_joininfo_t *info)
+static void
+smbd_join_workgroup(smb_joininfo_t *info, smb_joinres_t *res)
 {
 	char nb_domain[SMB_PI_MAX_DOMAIN];
+
+	syslog(LOG_DEBUG, "smbd: join workgroup: %s", info->domain_name);
 
 	(void) smb_config_getstr(SMB_CI_DOMAIN_NAME, nb_domain,
 	    sizeof (nb_domain));
@@ -276,8 +351,17 @@ smbd_join_domain(smb_joininfo_t *info, smb_joinres_t *res)
 		status = NT_STATUS_DOMAIN_CONTROLLER_NOT_FOUND;
 		goto errout;
 	}
+	syslog(LOG_DEBUG, "smbd: join domain: %s", info->domain_name);
 
 	/* info->domain_name could either be NetBIOS domain name or FQDN */
+	mlsvc_join(info, res);
+	if (res->status == 0) {
+		smbd_set_secmode(SMB_SECMODE_DOMAIN);
+	} else {
+		syslog(LOG_ERR, "smbd: failed joining %s (%s)",
+		    info->domain_name, xlate_nt_status(res->status));
+	}
+
 	status = mlsvc_join(&dxi, info->domain_username, info->domain_passwd);
 	if (status != NT_STATUS_SUCCESS) {
 		syslog(LOG_ERR, "smbd: failed joining %s (%s)",

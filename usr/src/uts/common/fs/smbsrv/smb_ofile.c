@@ -187,6 +187,8 @@ smb_ofile_open(
 	uint16_t	fid;
 	smb_attr_t	attr;
 	int		rc;
+	enum errstates { EMPTY, FIDALLOC, CRHELD, MUTEXINIT };
+	enum errstates	state = EMPTY;
 
 	if (smb_idpool_alloc(&tree->t_fid_pool, &fid)) {
 		err->status = NT_STATUS_TOO_MANY_OPENED_FILES;
@@ -320,6 +322,7 @@ errout:
 void
 smb_ofile_close(smb_ofile_t *of, int32_t mtime_sec)
 {
+	smb_attr_t *pa;
 	timestruc_t now;
 	uint32_t flags = 0;
 
@@ -334,103 +337,91 @@ smb_ofile_close(smb_ofile_t *of, int32_t mtime_sec)
 	of->f_state = SMB_OFILE_STATE_CLOSING;
 	mutex_exit(&of->f_mutex);
 
-		if (of->f_ftype == SMB_FTYPE_MESG_PIPE) {
-			smb_opipe_close(of);
-			smb_server_dec_pipes(of->f_server);
-		} else {
-			smb_attr_t *pa = &of->f_pending_attr;
+	switch (of->f_ftype) {
+	case SMB_FTYPE_BYTE_PIPE:
+	case SMB_FTYPE_MESG_PIPE:
+		smb_opipe_close(of);
+		smb_server_dec_pipes(of->f_server);
+		break;
 
-			/*
-			 * In here we make changes to of->f_pending_attr
-			 * while not holding of->f_mutex.  This is OK
-			 * because we've changed f_state to CLOSING,
-			 * so no more threads will take this path.
-			 */
-			if (mtime_sec != 0) {
-				pa->sa_vattr.va_mtime.tv_sec = mtime_sec;
-				pa->sa_mask |= SMB_AT_MTIME;
-			}
+	case SMB_FTYPE_DISK:
+	case SMB_FTYPE_PRINTER:
+		/*
+		 * In here we make changes to of->f_pending_attr
+		 * while not holding of->f_mutex.  This is OK
+		 * because we've changed f_state to CLOSING,
+		 * so no more threads will take this path.
+		 */
+		pa = &of->f_pending_attr;
+		if (mtime_sec != 0) {
+			pa->sa_vattr.va_mtime.tv_sec = mtime_sec;
+			pa->sa_mask |= SMB_AT_MTIME;
+		}
 
-			/*
-			 * If we have ever modified data via this handle
-			 * (write or truncate) and if the mtime was not
-			 * set via this handle, update the mtime again
-			 * during the close.  Windows expects this.
-			 * [ MS-FSA 2.1.5.4 "Update Timestamps" ]
-			 */
-			if (of->f_written &&
-			    (pa->sa_mask & SMB_AT_MTIME) == 0) {
-				pa->sa_mask |= SMB_AT_MTIME;
-				gethrestime(&now);
-				pa->sa_vattr.va_mtime = now;
-			}
+		/*
+		 * If we have ever modified data via this handle
+		 * (write or truncate) and if the mtime was not
+		 * set via this handle, update the mtime again
+		 * during the close.  Windows expects this.
+		 * [ MS-FSA 2.1.5.4 "Update Timestamps" ]
+		 */
+		if (of->f_written &&
+		    (pa->sa_mask & SMB_AT_MTIME) == 0) {
+			pa->sa_mask |= SMB_AT_MTIME;
+			gethrestime(&now);
+			pa->sa_vattr.va_mtime = now;
+		}
 
-			if (of->f_flags & SMB_OFLAGS_SET_DELETE_ON_CLOSE) {
-				if (smb_tree_has_feature(of->f_tree,
-				    SMB_TREE_CATIA)) {
-					flags |= SMB_CATIA;
-				}
-				(void) smb_node_set_delete_on_close(of->f_node,
-				    of->f_cr, flags);
+		if (of->f_flags & SMB_OFLAGS_SET_DELETE_ON_CLOSE) {
+			if (smb_tree_has_feature(of->f_tree,
+			    SMB_TREE_CATIA)) {
+				flags |= SMB_CATIA;
 			}
-			smb_fsop_unshrlock(of->f_cr, of->f_node, of->f_uniqid);
-			smb_node_destroy_lock_by_ofile(of->f_node, of);
-
-			if (smb_node_is_file(of->f_node)) {
-				(void) smb_fsop_close(of->f_node, of->f_mode,
-				    of->f_cr);
-				smb_oplock_release(of->f_node, of);
-			}
-			if (smb_node_dec_open_ofiles(of->f_node) == 0) {
-				/*
-				 * Last close. The f_pending_attr has
-				 * only times (atime,ctime,mtime) so
-				 * we can borrow it to commit the
-				 * n_pending_dosattr from the node.
-				 */
-				pa->sa_dosattr =
-				    of->f_node->n_pending_dosattr;
-				if (pa->sa_dosattr != 0)
-					pa->sa_mask |= SMB_AT_DOSATTR;
-				/* Let's leave this zero when not in use. */
-				of->f_node->n_allocsz = 0;
-			}
-			if (pa->sa_mask != 0) {
-				/*
-				 * Commit any pending attributes from
-				 * the ofile we're closing.  Note that
-				 * we pass NULL as the ofile to setattr
-				 * so it will write to the file system
-				 * and not keep anything on the ofile.
-				 * This clears n_pending_dosattr if
-				 * there are no opens, otherwise the
-				 * dosattr will be pending again.
-				 */
-				(void) smb_node_setattr(NULL, of->f_node,
-				    of->f_cr, NULL, pa);
-			}
-
-			/*
-			 * Cancel any notify change requests that
-			 * may be using this open instance.
-			 */
-			if (of->f_node->n_fcn.fcn_count)
-				smb_notify_file_closed(of);
-
-			smb_server_dec_files(of->f_server);
+			(void) smb_node_set_delete_on_close(of->f_node,
+			    of->f_cr, flags);
 		}
 		smb_fsop_unshrlock(of->f_cr, of->f_node, of->f_uniqid);
 		smb_node_destroy_lock_by_ofile(of->f_node, of);
 
-		mutex_enter(&of->f_mutex);
-		ASSERT(of->f_refcnt);
-		ASSERT(of->f_state == SMB_OFILE_STATE_CLOSING);
-		of->f_state = SMB_OFILE_STATE_CLOSED;
-		break;
-	}
-	case SMB_OFILE_STATE_CLOSED:
-	case SMB_OFILE_STATE_CLOSING:
-		break;
+		if (smb_node_is_file(of->f_node)) {
+			(void) smb_fsop_close(of->f_node, of->f_mode,
+			    of->f_cr);
+			smb_oplock_release(of->f_node, of);
+		} else {
+			/*
+			 * If there was an odir, close it.
+			 */
+			if (of->f_odir != NULL)
+				smb_odir_close(of->f_odir);
+		}
+		if (smb_node_dec_open_ofiles(of->f_node) == 0) {
+			/*
+			 * Last close. The f_pending_attr has
+			 * only times (atime,ctime,mtime) so
+			 * we can borrow it to commit the
+			 * n_pending_dosattr from the node.
+			 */
+			pa->sa_dosattr =
+			    of->f_node->n_pending_dosattr;
+			if (pa->sa_dosattr != 0)
+				pa->sa_mask |= SMB_AT_DOSATTR;
+			/* Let's leave this zero when not in use. */
+			of->f_node->n_allocsz = 0;
+		}
+		if (pa->sa_mask != 0) {
+			/*
+			 * Commit any pending attributes from
+			 * the ofile we're closing.  Note that
+			 * we pass NULL as the ofile to setattr
+			 * so it will write to the file system
+			 * and not keep anything on the ofile.
+			 * This clears n_pending_dosattr if
+			 * there are no opens, otherwise the
+			 * dosattr will be pending again.
+			 */
+			(void) smb_node_setattr(NULL, of->f_node,
+			    of->f_cr, NULL, pa);
+		}
 
 		/*
 		 * Cancel any notify change requests that

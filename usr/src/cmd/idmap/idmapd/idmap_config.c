@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 
@@ -54,6 +54,7 @@
 #define	DEBUG_PG		"debug"
 #define	RECONFIGURE		1
 #define	POKE_AUTO_DISCOVERY	2
+#define	KICK_AUTO_DISCOVERY	3
 
 /*
  * Default cache timeouts.  Can override via svccfg
@@ -63,15 +64,30 @@
 #define	ID_CACHE_TMO_DEFAULT	86400
 #define	NAME_CACHE_TMO_DEFAULT	604800
 
+/*
+ * Default maximum time between rediscovery runs.
+ * config/rediscovery_interval = count: seconds
+ */
+#define	REDISCOVERY_INTERVAL_DEFAULT	3600
+
+/*
+ * Mininum time between rediscovery runs, in case adutils gives us a
+ * really short TTL (which it never should, but be defensive)
+ * (not configurable) seconds.
+ */
+#define	MIN_REDISCOVERY_INTERVAL	60
+
 enum event_type {
 	EVENT_NOTHING,	/* Woke up for no good reason */
 	EVENT_TIMEOUT,	/* Timeout expired */
 	EVENT_ROUTING,	/* An interesting routing event happened */
-	EVENT_POKED,	/* Requested rediscover, i.e. DC failed. */
+	EVENT_POKED,	/* Requested from degrade_svc() */
+	EVENT_KICKED,	/* Force rediscovery, i.e. DC failed. */
 	EVENT_REFRESH,	/* SMF refresh */
 };
 
 
+static void idmapd_set_krb5_realm(char *);
 
 static pthread_t update_thread_handle = 0;
 
@@ -1244,11 +1260,15 @@ wait_for_event(struct timespec *timeoutp)
 		return (EVENT_TIMEOUT);
 
 	case PORT_SOURCE_USER:
-		if (pe.portev_events == POKE_AUTO_DISCOVERY)
-			return (EVENT_POKED);
-		if (pe.portev_events == RECONFIGURE)
+		switch (pe.portev_events) {
+		case RECONFIGURE:
 			return (EVENT_REFRESH);
-		break;
+		case POKE_AUTO_DISCOVERY:
+			return (EVENT_POKED);
+		case KICK_AUTO_DISCOVERY:
+			return (EVENT_KICKED);
+		}
+		return (EVENT_NOTHING);
 
 	case PORT_SOURCE_FD:
 		if (pe.portev_object == rt_sock) {
@@ -1345,6 +1365,10 @@ idmap_cfg_update_thread(void *arg)
 				timeoutp = &timeout;
 			}
 
+			if (DBG(CONFIG, 1))
+				idmapdlog(LOG_DEBUG,
+				    "_cfg_update_thread waiting");
+
 			switch (wait_for_event(timeoutp)) {
 			case EVENT_NOTHING:
 				if (DBG(CONFIG, 2))
@@ -1365,9 +1389,13 @@ idmap_cfg_update_thread(void *arg)
 				(void) unlink(IDMAP_CACHEDIR "/ccache");
 				break;
 			case EVENT_POKED:
-				if (DBG(CONFIG, 1)) {
+				if (DBG(CONFIG, 1))
 					idmapdlog(LOG_DEBUG, "poked");
-				}
+				break;
+			case EVENT_KICKED:
+				if (DBG(CONFIG, 1))
+					idmapdlog(LOG_DEBUG, "kicked");
+				flags |= CFG_FORGET_DC;
 				break;
 			case EVENT_TIMEOUT:
 				if (DBG(CONFIG, 1))
@@ -1872,8 +1900,7 @@ discover_trusted_domains(idmap_pg_config_t *pgcfg, ad_disc_t ad_ctx)
 				continue;
 			}
 			domainsinforest =
-			    ad_disc_get_DomainsInForest(trusted_ctx,
-			    NULL);
+			    ad_disc_get_DomainsInForest(trusted_ctx, NULL);
 			if (domainsinforest == NULL) {
 				if (DBG(CONFIG, 1)) {
 					idmapdlog(LOG_DEBUG,
@@ -1918,83 +1945,136 @@ discover_trusted_domains(idmap_pg_config_t *pgcfg, ad_disc_t ad_ctx)
  * idmap_cfg_discover() is called *after* idmap_cfg_load_smf(), so it
  * needs to be careful not to overwrite any properties set in SMF.
  */
-static
-void
-idmap_cfg_discover(idmap_cfg_handles_t *handles, idmap_pg_config_t *pgcfg)
+static void
+idmap_cfg_discover1(idmap_cfg_handles_t *handles, idmap_pg_config_t *pgcfg)
 {
 	ad_disc_t ad_ctx = handles->ad_ctx;
 	FILE *status_fp = NULL;
+	time_t t0, t1;
 
-	if (pgcfg->use_ads == B_FALSE) {
-		if (DBG(CONFIG, 1))
-			idmapdlog(LOG_DEBUG, "ADS disabled.");
-		return;
-	}
-
+	t0 = time(NULL);
 	if (DBG(CONFIG, 1))
-		idmapdlog(LOG_DEBUG, "Running discovery.");
+		idmapdlog(LOG_DEBUG, "Running domain discovery.");
 
 	ad_disc_refresh(ad_ctx);
 
 	(void) unlink(IDMAP_CACHEDIR "/discovery.log");
 	status_fp = fopen(IDMAP_CACHEDIR "/discovery.log", "w");
-	if (status_fp)
+	if (status_fp) {
+		(void) fchmod(fileno(status_fp), 0644);
 		ad_disc_set_StatusFP(ad_ctx, status_fp);
+	}
 
 	if (pgcfg->domain_name == NULL) {
 		idmapdlog(LOG_DEBUG, "No domain name specified.");
 		if (status_fp)
 			(void) fprintf(status_fp, "(no domain name)\n");
-	} else {
-		if (pgcfg->domain_controller == NULL)
-			pgcfg->domain_controller =
-			    ad_disc_get_DomainController(ad_ctx,
-			    AD_DISC_PREFER_SITE,
-			    &pgcfg->domain_controller_auto_disc);
+		goto out;
+	}
 
-		if (pgcfg->domain_guid == NULL) {
-			char buf[UUID_PRINTABLE_STRING_LENGTH];
-			uchar_t *u = ad_disc_get_DomainGUID(ad_ctx,
-			    &pgcfg->domain_guid_auto_disc);
+	if (pgcfg->domain_controller == NULL)
+		pgcfg->domain_controller =
+		    ad_disc_get_DomainController(ad_ctx,
+		    AD_DISC_PREFER_SITE,
+		    &pgcfg->domain_controller_auto_disc);
+
+	if (pgcfg->domain_guid == NULL) {
+		char buf[UUID_PRINTABLE_STRING_LENGTH];
+		uchar_t *u = ad_disc_get_DomainGUID(ad_ctx,
+		    &pgcfg->domain_guid_auto_disc);
+		(void) memset(buf, 0, sizeof (buf));
+		if (u != NULL) {
 			uuid_unparse(u, buf);
 			pgcfg->domain_guid = strdup(buf);
 		}
+	}
 
-		if (pgcfg->forest_name == NULL)
-			pgcfg->forest_name = ad_disc_get_ForestName(ad_ctx,
-			    &pgcfg->forest_name_auto_disc);
+	if (pgcfg->forest_name == NULL)
+		pgcfg->forest_name = ad_disc_get_ForestName(ad_ctx,
+		    &pgcfg->forest_name_auto_disc);
 
-		if (pgcfg->site_name == NULL)
-			pgcfg->site_name = ad_disc_get_SiteName(ad_ctx,
-			    &pgcfg->site_name_auto_disc);
+	if (pgcfg->site_name == NULL)
+		pgcfg->site_name = ad_disc_get_SiteName(ad_ctx,
+		    &pgcfg->site_name_auto_disc);
 
-		if (pgcfg->global_catalog == NULL)
-			pgcfg->global_catalog =
-			    ad_disc_get_GlobalCatalog(ad_ctx,
-			    AD_DISC_PREFER_SITE,
-			    &pgcfg->global_catalog_auto_disc);
+	if (DBG(CONFIG, 1)) {
+		log_if_unable(pgcfg->domain_name, "Domain Name");
+		log_if_unable(pgcfg->domain_controller,
+		    "Domain Controller");
+		log_if_unable(pgcfg->domain_guid, "Domain GUID");
+		log_if_unable(pgcfg->forest_name, "Forest Name");
+		log_if_unable(pgcfg->site_name, "Site Name");
+	}
 
+out:
+	if (status_fp) {
+		ad_disc_set_StatusFP(ad_ctx, NULL);
+		(void) fclose(status_fp);
+		status_fp = NULL;
+	}
+
+	if (DBG(CONFIG, 1))
+		idmapdlog(LOG_DEBUG, "Domain discovery done.");
+
+	/*
+	 * Log when this took more than 15 sec.
+	 */
+	t1 = time(NULL);
+	if (t1 > (t0 + 15)) {
+		idmapdlog(LOG_NOTICE, "Domain discovery took %d sec.",
+		    (int)(t1 - t0));
+		idmapdlog(LOG_NOTICE, "Check the DNS configuration.");
+	}
+}
+
+/*
+ * This is the second part of discovery, which can take a while.
+ * We don't want to hold up parties who just want to know what
+ * domain controller we're using (like smbd), so this part runs
+ * after we've updated that info in the "live" config and told
+ * such consumers to go ahead.
+ *
+ * This is a lot like idmap_cfg_discover(), but used LDAP queries
+ * get the forest information from the global catalog servers.
+ *
+ * Note: the previous update_* calls have usually nuked any
+ * useful information from pgcfg before we get here, so we
+ * can only use it store discovery results, not to read.
+ */
+static void
+idmap_cfg_discover2(idmap_cfg_handles_t *handles, idmap_pg_config_t *pgcfg)
+{
+	ad_disc_t ad_ctx = handles->ad_ctx;
+	FILE *status_fp = NULL;
+	time_t t0, t1;
+
+	t0 = time(NULL);
+	if (DBG(CONFIG, 1))
+		idmapdlog(LOG_DEBUG, "Running forest discovery.");
+
+	status_fp = fopen(IDMAP_CACHEDIR "/discovery.log", "a");
+	if (status_fp)
+		ad_disc_set_StatusFP(ad_ctx, status_fp);
+
+	if (pgcfg->global_catalog == NULL)
+		pgcfg->global_catalog =
+		    ad_disc_get_GlobalCatalog(ad_ctx,
+		    AD_DISC_PREFER_SITE,
+		    &pgcfg->global_catalog_auto_disc);
+
+	if (pgcfg->global_catalog != NULL) {
 		pgcfg->domains_in_forest =
 		    ad_disc_get_DomainsInForest(ad_ctx, NULL);
 
 		if (!pgcfg->disable_cross_forest_trusts)
 			discover_trusted_domains(pgcfg, ad_ctx);
+	}
 
-		if (DBG(CONFIG, 1)) {
-			log_if_unable(pgcfg->domain_name, "Domain Name");
-			log_if_unable(pgcfg->domain_controller,
-			    "Domain Controller");
-			log_if_unable(pgcfg->domain_guid, "Domain GUID");
-			log_if_unable(pgcfg->forest_name, "Forest Name");
-			log_if_unable(pgcfg->site_name, "Site Name");
-			log_if_unable(pgcfg->global_catalog, "Global Catalog");
-			log_if_unable(pgcfg->domains_in_forest,
-			    "Domains in the Forest");
-			if (!pgcfg->disable_cross_forest_trusts) {
-				log_if_unable(pgcfg->trusted_domains,
-				    "Trusted Domains");
-			}
-		}
+	if (DBG(CONFIG, 1)) {
+		log_if_unable(pgcfg->global_catalog, "Global Catalog");
+		log_if_unable(pgcfg->domains_in_forest,
+		    "Domains in the Forest");
+		/* Empty trusted domains list is OK. */
 	}
 
 	if (status_fp) {
@@ -2005,7 +2085,17 @@ idmap_cfg_discover(idmap_cfg_handles_t *handles, idmap_pg_config_t *pgcfg)
 	ad_disc_done(ad_ctx);
 
 	if (DBG(CONFIG, 1))
-		idmapdlog(LOG_DEBUG, "Discovery done.");
+		idmapdlog(LOG_DEBUG, "Forest discovery done.");
+
+	/*
+	 * Log when this took more than 30 sec.
+	 */
+	t1 = time(NULL);
+	if (t1 > (t0 + 30)) {
+		idmapdlog(LOG_NOTICE, "Forest discovery took %d sec.",
+		    (int)(t1 - t0));
+		idmapdlog(LOG_NOTICE, "Check AD join status.");
+	}
 }
 
 
@@ -2033,6 +2123,7 @@ idmap_cfg_discover(idmap_cfg_handles_t *handles, idmap_pg_config_t *pgcfg)
 int
 idmap_cfg_load(idmap_cfg_t *cfg, int flags)
 {
+	const ad_disc_t ad_ctx = cfg->handles.ad_ctx;
 	int rc = 0;
 	int errors;
 	int changed = 0;
@@ -2052,7 +2143,8 @@ idmap_cfg_load(idmap_cfg_t *cfg, int flags)
 		goto err;
 
 	if (flags & CFG_DISCOVER) {
-		const ad_disc_t ad_ctx = cfg->handles.ad_ctx;
+
+		ad_disc_refresh(ad_ctx);
 
 		/*
 		 * Unless we've been asked to forget the current DC,
@@ -2081,7 +2173,7 @@ idmap_cfg_load(idmap_cfg_t *cfg, int flags)
 		_idmapdstate.addisc_st |= ADDISC_ST_RUNNING;
 		(void) mutex_unlock(&_idmapdstate.addisc_lk);
 
-		idmap_cfg_discover(&cfg->handles, &new_pgcfg);
+		idmap_cfg_discover1(&cfg->handles, &new_pgcfg);
 
 		WRLOCK_CONFIG();
 		(void) mutex_lock(&_idmapdstate.addisc_lk);
@@ -2143,8 +2235,12 @@ idmap_cfg_load(idmap_cfg_t *cfg, int flags)
 
 	/* Props that can be discovered or set in SMF updated here */
 
-	changed += update_string(&live_pgcfg->domain_name,
-	    &new_pgcfg.domain_name, "domain_name");
+	if (update_string(&live_pgcfg->domain_name,
+	    &new_pgcfg.domain_name, "domain_name")) {
+		changed++;
+		ad_reload_required = TRUE;
+		idmapd_set_krb5_realm(live_pgcfg->domain_name);
+	}
 	live_pgcfg->domain_name_auto_disc = new_pgcfg.domain_name_auto_disc;
 
 	changed += update_string(&live_pgcfg->domain_guid,
@@ -2165,13 +2261,35 @@ idmap_cfg_load(idmap_cfg_t *cfg, int flags)
 	    &new_pgcfg.site_name, "site_name");
 	live_pgcfg->site_name_auto_disc = new_pgcfg.site_name_auto_disc;
 
-	if (update_dirs(&live_pgcfg->global_catalog,
-	    &new_pgcfg.global_catalog, "global_catalog")) {
-		changed++;
-		if (live_pgcfg->global_catalog != NULL &&
-		    live_pgcfg->global_catalog[0].host[0] != '\0')
-			ad_reload_required = TRUE;
+	if (DBG(CONFIG, 1)) {
+		if (changed)
+			idmapdlog(LOG_NOTICE, "Configuration changed");
+		else
+			idmapdlog(LOG_NOTICE, "Configuration unchanged");
 	}
+
+	UNLOCK_CONFIG();
+
+	if (dc_changed != 0) {
+		notify_dc_changed();
+	}
+
+	/*
+	 * Discovery2 can take a while.
+	 */
+	if (flags & CFG_DISCOVER) {
+		if (live_pgcfg->domain_name != NULL &&
+		    live_pgcfg->forest_name != NULL)
+			idmap_cfg_discover2(&cfg->handles, &new_pgcfg);
+		ad_disc_done(ad_ctx);
+	}
+
+	WRLOCK_CONFIG();
+
+	/* More props that can be discovered or set in SMF */
+
+	changed += update_dirs(&live_pgcfg->global_catalog,
+	    &new_pgcfg.global_catalog, "global_catalog");
 	live_pgcfg->global_catalog_auto_disc =
 	    new_pgcfg.global_catalog_auto_disc;
 
@@ -2380,31 +2498,45 @@ idmap_cfg_fini(idmap_cfg_t *cfg)
 void
 idmap_cfg_poke_updates(void)
 {
+	int prev_st;
+
 	if (DBG(CONFIG, 1)) {
 		idmapdlog(LOG_INFO, "idmap_cfg_poke_updates");
 	}
 
 	(void) mutex_lock(&_idmapdstate.addisc_lk);
+	prev_st = _idmapdstate.addisc_st;
 	_idmapdstate.addisc_st |= ADDISC_ST_REQUESTED;
 	(void) mutex_unlock(&_idmapdstate.addisc_lk);
 
-	if (idmapd_ev_port != -1)
+	if (prev_st & ADDISC_ST_REQUESTED) {
+		idmapdlog(LOG_DEBUG, "already poked");
+	} else {
+		idmapdlog(LOG_DEBUG, "port send poke");
 		(void) port_send(idmapd_ev_port, POKE_AUTO_DISCOVERY, NULL);
+	}
 }
 
 void
 idmap_cfg_force_rediscovery(void)
 {
+	int prev_st;
+
 	if (DBG(CONFIG, 1)) {
 		idmapdlog(LOG_INFO, "idmap_cfg_force_rediscovery");
 	}
 
 	(void) mutex_lock(&_idmapdstate.addisc_lk);
+	prev_st = _idmapdstate.addisc_st;
 	_idmapdstate.addisc_st |= ADDISC_ST_REQUESTED;
 	(void) mutex_unlock(&_idmapdstate.addisc_lk);
 
-	if (idmapd_ev_port != -1)
-		(void) port_send(idmapd_ev_port, RECONFIGURE, NULL);
+	if (prev_st & ADDISC_ST_REQUESTED) {
+		idmapdlog(LOG_DEBUG, "already kicked");
+	} else {
+		idmapdlog(LOG_DEBUG, "port send kick");
+		(void) port_send(idmapd_ev_port, KICK_AUTO_DISCOVERY, NULL);
+	}
 }
 
 /*ARGSUSED*/
@@ -2565,4 +2697,32 @@ idmap_cfg_upgrade(idmap_cfg_t *cfg)
 		return (rc);
 
 	return (0);
+}
+
+/*
+ * The LDAP code passes principal names lacking any
+ * realm information, which causes mech_krb5 to do
+ * awful things trying to figure out the realm.
+ * Avoid that by making sure it has a default,
+ * even when krb5.conf is not configured.
+ */
+static void
+idmapd_set_krb5_realm(char *domain)
+{
+	static char realm[MAXHOSTNAMELEN];
+	size_t ilen, olen;
+	int err;
+
+	if (domain == NULL) {
+		(void) unsetenv("KRB5_DEFAULT_REALM");
+		return;
+	}
+
+	/* Convert to upper case, in place. */
+	(void) strlcpy(realm, domain, sizeof (realm));
+	olen = ilen = strlen(realm);
+	(void) u8_textprep_str(realm, &ilen, realm, &olen,
+	    U8_TEXTPREP_TOUPPER, U8_UNICODE_LATEST, &err);
+
+	(void) setenv("KRB5_DEFAULT_REALM", realm, 1);
 }

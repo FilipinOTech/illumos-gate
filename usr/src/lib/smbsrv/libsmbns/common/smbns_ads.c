@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/param.h>
@@ -264,12 +264,7 @@ smb_ads_refresh(boolean_t force_rediscovery)
 	(void) smb_config_getstr(SMB_CI_ADS_SITE, new_site, SMB_ADS_SITE_MAX);
 	(void) smb_config_getip(SMB_CI_DOMAIN_SRV, &new_pdc);
 	(void) mutex_lock(&smb_ads_cfg.c_mtx);
-	if (smb_strcasecmp(smb_ads_cfg.c_site, new_site, 0)) {
-		(void) strlcpy(smb_ads_cfg.c_site, new_site, SMB_ADS_SITE_MAX);
-		purge = B_TRUE;
-	}
-
-	smb_ads_cfg.c_pdc = new_pdc;
+	(void) strlcpy(smb_ads_cfg.c_site, new_site, SMB_ADS_SITE_MAX);
 	(void) mutex_unlock(&smb_ads_cfg.c_mtx);
 
 	(void) mutex_lock(&smb_ads_cached_host_mtx);
@@ -278,14 +273,12 @@ smb_ads_refresh(boolean_t force_rediscovery)
 	    !smb_ads_match_pdc(smb_ads_cached_host_info))
 		purge = B_TRUE;
 	(void) mutex_unlock(&smb_ads_cached_host_mtx);
+	smb_ads_free_cached_host();
 
 	if (force_rediscovery) {
 		(void) _DsForceRediscovery(NULL, 0);
 		purge = B_TRUE;
 	}
-
-	if (purge)
-		smb_ads_free_cached_host();
 }
 
 
@@ -758,7 +751,7 @@ smb_ads_open_main(smb_ads_handle_t **hp, char *domain, char *user,
 	*hp = NULL;
 
 	if (user != NULL) {
-		err = smb_kinit(user, password);
+		err = smb_kinit(domain, user, password);
 		if (err != 0)
 			return (err);
 		user = NULL;
@@ -778,6 +771,7 @@ smb_ads_open_main(smb_ads_handle_t **hp, char *domain, char *user,
 	(void) memset(ah, 0, sizeof (smb_ads_handle_t));
 
 	if ((ld = ldap_init(ads_host->name, ads_host->port)) == NULL) {
+		syslog(LOG_ERR, "smbns: ldap_init failed");
 		smb_ads_free_cached_host();
 		free(ah);
 		free(ads_host);
@@ -837,7 +831,7 @@ smb_ads_open_main(smb_ads_handle_t **hp, char *domain, char *user,
 	rc = ldap_sasl_interactive_bind_s(ah->ld, "", "GSSAPI", NULL, NULL,
 	    LDAP_SASL_INTERACTIVE, &smb_ads_saslcallback, NULL);
 	if (rc != LDAP_SUCCESS) {
-		syslog(LOG_ERR, "ldal_sasl_interactive_bind_s failed (%s)",
+		syslog(LOG_ERR, "smbns: ldap_sasl_..._bind_s failed (%s)",
 		    ldap_err2string(rc));
 		smb_ads_close(ah);
 		free(ads_host);
@@ -1798,7 +1792,7 @@ smb_ads_lookup_computer_attr_kvno(smb_ads_handle_t *ah, char *dn)
  * That would be needed while acquiring Kerberos TGT ticket for the host
  * principal after the domain join operation.
  */
-smb_adjoin_status_t
+smb_ads_status_t
 smb_ads_join(char *domain, char *user, char *usr_passwd, char *machine_passwd)
 {
 	smb_ads_handle_t *ah = NULL;
@@ -1812,13 +1806,19 @@ smb_ads_join(char *domain, char *user, char *usr_passwd, char *machine_passwd)
 	smb_ads_qstat_t qstat;
 	char dn[SMB_ADS_DN_MAX];
 	char tmpfile[] = SMBNS_KRB5_KEYTAB_TMP;
-	int cnt;
+	int cnt, x;
 	smb_krb5_pn_set_t spns;
 	krb5_enctype *encptr;
 
 	if ((ah = smb_ads_open_main(domain, user, usr_passwd)) == NULL) {
 		smb_ccache_remove(SMB_CCACHE_PATH);
 		return (SMB_ADJOIN_ERR_GET_HANDLE);
+	}
+
+	rc = smb_ads_open_main(&ah, domain, user, usr_passwd);
+	if (rc != 0) {
+		smb_ccache_remove(SMB_CCACHE_PATH);
+		return (rc);
 	}
 
 	if ((dclevel = smb_ads_get_dc_level(ah)) == -1) {
@@ -1896,18 +1896,20 @@ smb_ads_join(char *domain, char *user, char *usr_passwd, char *machine_passwd)
 	    SMB_ADS_USER_ACCT_CTL_WKSTATION_TRUST_ACCT |
 	    SMB_ADS_USER_ACCT_CTL_TRUSTED_FOR_DELEGATION |
 	    SMB_ADS_USER_ACCT_CTL_DONT_EXPIRE_PASSWD);
-	if (smb_ads_update_computer_cntrl_attr(ah, usrctl_flags, dn)
-	    == LDAP_INSUFFICIENT_ACCESS) {
+set_ctl_again:
+	x = smb_ads_update_computer_cntrl_attr(ah, usrctl_flags, dn);
+	if (x != LDAP_SUCCESS && (usrctl_flags &
+	    SMB_ADS_USER_ACCT_CTL_TRUSTED_FOR_DELEGATION) != 0) {
 		syslog(LOG_NOTICE, "Unable to set the "
 "TRUSTED_FOR_DELEGATION userAccountControl flag on the "
 "machine account in Active Directory.  It may be necessary "
 "to set that via Active Directory administration.");
 		usrctl_flags &=
 		    ~SMB_ADS_USER_ACCT_CTL_TRUSTED_FOR_DELEGATION;
+		goto set_ctl_again;
 	}
-
 	if (smb_ads_update_computer_cntrl_attr(ah, usrctl_flags, dn)
-	    != 0) {
+	    != 0 || x != LDAP_SUCCESS) {
 		rc = SMB_ADJOIN_ERR_UPDATE_CNTRL_ATTR;
 		goto adjoin_cleanup;
 	}
@@ -2082,21 +2084,20 @@ smb_ads_match_pdc(smb_ads_host_info_t *host)
  * fqdn	  - fully-qualified domain name
  * server - fully-qualifed hostname of a DC
  * buf    - the hostname of the discovered DC
+ * dci    - the name and address of the found DC
  */
 uint32_t
-smb_ads_lookup_msdcs(char *fqdn, char *server, char *buf, uint32_t buflen)
+smb_ads_lookup_msdcs(char *fqdn, smb_dcinfo_t *dci)
 {
 	smb_ads_host_info_t *hinfo = NULL;
 	char *sought_host;
 	char ipstr[INET6_ADDRSTRLEN];
 
-	if (!fqdn || !buf)
+	if (!fqdn || !dci || !buf)
 		return (NT_STATUS_INTERNAL_ERROR);
 
 	ipstr[0] = '\0';
-	*buf = '\0';
-	sought_host = (*server == 0 ? NULL : server);
-	if ((hinfo = smb_ads_find_host(fqdn, sought_host)) == NULL)
+	if ((hinfo = smb_ads_find_host(fqdn)) == NULL)
 		return (NT_STATUS_DOMAIN_CONTROLLER_NOT_FOUND);
 
 	(void) smb_inet_ntop(&hinfo->ipaddr, ipstr,
@@ -2104,6 +2105,8 @@ smb_ads_lookup_msdcs(char *fqdn, char *server, char *buf, uint32_t buflen)
 	smb_tracef("msdcsLookupADS: %s [%s]", hinfo->name, ipstr);
 
 	(void) strlcpy(buf, hinfo->name, buflen);
+	(void) strlcpy(dci->dc_name, hinfo->name, sizeof (dci->dc_name));
+	dci->dc_addr = hinfo->ipaddr;
 
 	free(hinfo);
 	return (NT_STATUS_SUCCESS);

@@ -24,7 +24,7 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  *
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef _SYS_ACL_H
@@ -310,8 +310,13 @@ extern int cmp2acls(void *, void *);
 
 #endif	/* !defined(_KERNEL) */
 
+#if defined(__STDC__)
 extern int acl(const char *path, int cmd, int cnt, void *buf);
 extern int facl(int fd, int cmd, int cnt, void *buf);
+#else	/* !__STDC__ */
+extern int acl();
+extern int facl();
+#endif	/* defined(__STDC__) */
 
 #ifdef	__cplusplus
 }

@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/types.h>
@@ -1723,9 +1723,9 @@ ace_trivial_common(void *acep, int aclcnt,
 			return (1);
 
 		/*
-		 * Delete permission is never set by default
+		 * Delete permissions are never set by default
 		 */
-		if (mask & ACE_DELETE)
+		if (mask & (ACE_DELETE|ACE_DELETE_CHILD))
 			return (1);
 
 		/*

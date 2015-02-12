@@ -2630,9 +2630,8 @@ userquota_propname_decode(const char *propname, boolean_t zoned,
 			*cp = '\0';
 			cp++;
 			*ridp = strtoull(cp, &end, 10);
-		} else {
+		} else
 			end = "";
-		}
 		if (numericsid) {
 			free(numericsid);
 			numericsid = NULL;
@@ -2862,7 +2861,7 @@ parent_name(const char *path, char *buf, size_t buflen)
  * 'zoned' property, which is used to validate property settings when creating
  * new datasets.
  */
-int
+static int
 check_parents(libzfs_handle_t *hdl, const char *path, uint64_t *zoned,
     boolean_t accept_ancestor, int *prefixlen)
 {
@@ -3180,7 +3179,9 @@ zfs_create(libzfs_handle_t *hdl, const char *path, zfs_type_t type,
 		case EDOM:
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 			    "volume block size must be power of 2 from "
-			    "512B to 128KB"));
+			    "%u to %uk"),
+			    (uint_t)SPA_MINBLOCKSIZE,
+			    (uint_t)SPA_MAXBLOCKSIZE >> 10);
 
 			return (zfs_error(hdl, EZFS_BADPROP, errbuf));
 

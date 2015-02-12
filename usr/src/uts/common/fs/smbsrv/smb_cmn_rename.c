@@ -47,10 +47,14 @@ static uint32_t smb_rename_errno2status(int);
  * If the new filename (dst_fqi) already exists it may be overwritten
  * if flags == 1.
  *
+ * The passed path is a full path relative to the share root.
+ *
  * Returns NT status codes.
+ *
+ * Similar to smb_setinfo_link(), below.
  */
 uint32_t
-smb_setinfo_rename(smb_request_t *sr, smb_node_t *node, char *fname, int flags)
+smb_setinfo_rename(smb_request_t *sr, smb_node_t *node, char *path, int flags)
 {
 	smb_fqi_t	*src_fqi = &sr->arg.dirop.fqi;
 	smb_fqi_t	*dst_fqi = &sr->arg.dirop.dst_fqi;
@@ -65,6 +69,11 @@ smb_setinfo_rename(smb_request_t *sr, smb_node_t *node, char *fname, int flags)
 	src_fqi->fq_fnode = node;
 	src_fqi->fq_dnode = node->n_dnode;
 
+	/* validate the dst pathname */
+	smb_pathname_init(sr, dst_pn, path);
+	if (!smb_pathname_validate(sr, dst_pn))
+		return (NT_STATUS_OBJECT_NAME_INVALID);
+
 	/* costruct and validate the dst pathname */
 	smb_pathname_init(sr, dst_pn, fname);
 	if (!smb_pathname_validate(sr, dst_pn))
@@ -78,7 +87,8 @@ smb_setinfo_rename(smb_request_t *sr, smb_node_t *node, char *fname, int flags)
 		return (status);
 	}
 
-	return (0);
+	status = smb_common_rename(sr, src_fqi, dst_fqi);
+	return (status);
 }
 
 /*
@@ -92,17 +102,20 @@ smb_setinfo_rename(smb_request_t *sr, smb_node_t *node, char *fname, int flags)
  * rename.  Otherwise, we do a full case-insensitive rename.
  *
  * Returns NT status values.
+ *
+ * Similar to smb_make_link(), below.
  */
 uint32_t
 smb_common_rename(smb_request_t *sr, smb_fqi_t *src_fqi, smb_fqi_t *dst_fqi)
 {
 	smb_node_t *src_fnode, *src_dnode, *dst_dnode;
 	smb_node_t *dst_fnode = 0;
-	smb_node_t *tnode = 0;
-	int rc, count;
-	DWORD status;
+	smb_node_t *tnode;
 	char *new_name, *path;
+	DWORD status;
+	int rc, count;
 
+	tnode = sr->tid_tree->t_snode;
 	path = dst_fqi->fq_path.pn_path;
 
 	/* Check if attempting to rename a stream - not yet supported */
@@ -110,7 +123,11 @@ smb_common_rename(smb_request_t *sr, smb_fqi_t *src_fqi, smb_fqi_t *dst_fqi)
 	if (rc != 0)
 		return (smb_rename_errno2status(rc));
 
-	/* The source node may already have been provided */
+	/*
+	 * The source node may already have been provided,
+	 * i.e. when called by SMB1/SMB2 smb_setinfo_rename.
+	 * Not provided by smb_com_rename, smb_com_nt_rename.
+	 */
 	if (src_fqi->fq_fnode) {
 		smb_node_start_crit(src_fqi->fq_fnode, RW_READER);
 		smb_node_ref(src_fqi->fq_fnode);
@@ -125,11 +142,16 @@ smb_common_rename(smb_request_t *sr, smb_fqi_t *src_fqi, smb_fqi_t *dst_fqi)
 	src_fnode = src_fqi->fq_fnode;
 	src_dnode = src_fqi->fq_dnode;
 
-	/* Find destination dnode and last_comp */
+	/*
+	 * Find the destination dnode and last component.
+	 * May already be provided, i.e. when called via
+	 * SMB1 trans2 setinfo.
+	 */
 	if (dst_fqi->fq_dnode) {
+		/* called via smb_set_rename_info */
 		smb_node_ref(dst_fqi->fq_dnode);
 	} else {
-		tnode = sr->tid_tree->t_snode;
+		/* called via smb2_setf_rename, smb_com_rename, etc. */
 		rc = smb_pathname_reduce(sr, sr->user_cr, path, tnode, tnode,
 		    &dst_fqi->fq_dnode, dst_fqi->fq_last_comp);
 		if (rc != 0) {
@@ -358,14 +380,18 @@ smb_rename_check_stream(smb_fqi_t *src_fqi, smb_fqi_t *dst_fqi)
 /*
  * smb_setinfo_link
  *
- * Implements SMB2 set_info, FileRenameInformation.
+ * Implements FileRenameInformation for SMB1 Trans2 setinfo, SMB2 setinfo.
  * If the new filename (dst_fqi) already exists it may be overwritten
  * if flags == 1.
  *
+ * The passed path is a full path relative to the share root.
+ *
  * Returns NT status codes.
+ *
+ * Similar to smb_setinfo_rename(), above.
  */
 uint32_t
-smb_setinfo_link(smb_request_t *sr, smb_node_t *node, char *fname, int flags)
+smb_setinfo_link(smb_request_t *sr, smb_node_t *node, char *path, int flags)
 {
 	smb_fqi_t	*src_fqi = &sr->arg.dirop.fqi;
 	smb_fqi_t	*dst_fqi = &sr->arg.dirop.dst_fqi;
@@ -411,7 +437,8 @@ smb_setinfo_link(smb_request_t *sr, smb_node_t *node, char *fname, int flags)
 		return (status);
 	}
 
-	return (0);
+	status = smb_make_link(sr, src_fqi, dst_fqi);
+	return (status);
 }
 
 /*
@@ -427,6 +454,8 @@ smb_setinfo_link(smb_request_t *sr, smb_node_t *node, char *fname, int flags)
  * If the target of the symlink does not exist we fail with ENOENT.
  *
  * Returns NT status values.
+ *
+ * Similar to smb_common_rename() above.
  */
 uint32_t
 smb_make_link(smb_request_t *sr, smb_fqi_t *src_fqi, smb_fqi_t *dst_fqi)
@@ -435,16 +464,26 @@ smb_make_link(smb_request_t *sr, smb_fqi_t *src_fqi, smb_fqi_t *dst_fqi)
 	char *path;
 	int rc;
 
+	tnode = sr->tid_tree->t_snode;
+	path = dst_fqi->fq_path.pn_path;
+
 	/* Cannnot create link on named stream */
 	if (smb_is_stream_name(src_fqi->fq_path.pn_path) ||
 	    smb_is_stream_name(dst_fqi->fq_path.pn_path)) {
 		return (NT_STATUS_INVALID_PARAMETER);
 	}
 
-	/* lookup and validate src node */
-	rc = smb_rename_lookup_src(sr);
-	if (rc != 0)
-		return (smb_rename_errno2status(rc));
+	/* The source node may already have been provided */
+	if (src_fqi->fq_fnode) {
+		smb_node_start_crit(src_fqi->fq_fnode, RW_READER);
+		smb_node_ref(src_fqi->fq_fnode);
+		smb_node_ref(src_fqi->fq_dnode);
+	} else {
+		/* lookup and validate src node */
+		rc = smb_rename_lookup_src(sr);
+		if (rc != 0)
+			return (smb_rename_errno2status(rc));
+	}
 
 	/* Not valid to create hardlink for directory */
 	if (smb_node_is_dir(src_fqi->fq_fnode)) {
@@ -459,17 +498,23 @@ smb_make_link(smb_request_t *sr, smb_fqi_t *src_fqi, smb_fqi_t *dst_fqi)
 		return (0);
 	}
 
-	/* find the destination dnode and last_comp */
-	tnode = sr->tid_tree->t_snode;
-	path = dst_fqi->fq_path.pn_path;
-	rc = smb_pathname_reduce(sr, sr->user_cr, path, tnode, tnode,
-	    &dst_fqi->fq_dnode, dst_fqi->fq_last_comp);
-	if (rc != 0) {
-		smb_rename_release_src(sr);
-		return (smb_rename_errno2status(rc));
+	/*
+	 * Find the destination dnode and last component.
+	 * May already be provided, i.e. when called via
+	 * SMB1 trans2 setinfo.
+	 */
+	if (dst_fqi->fq_dnode) {
+		smb_node_ref(dst_fqi->fq_dnode);
+	} else {
+		rc = smb_pathname_reduce(sr, sr->user_cr, path, tnode, tnode,
+		    &dst_fqi->fq_dnode, dst_fqi->fq_last_comp);
+		if (rc != 0) {
+			smb_rename_release_src(sr);
+			return (smb_rename_errno2status(rc));
+		}
 	}
 
-	/* If name match in same directory, we're done */
+	/* If CI name match in same directory, we're done */
 	if ((src_fqi->fq_dnode == dst_fqi->fq_dnode) &&
 	    (smb_strcasecmp(src_fqi->fq_fnode->od_name,
 	    dst_fqi->fq_last_comp, 0) == 0)) {

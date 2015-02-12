@@ -547,6 +547,8 @@ smb_session_reader(smb_session_t *session)
 
 		if (hdr.xh_length < SMB_HEADER_LEN)
 			return (EPROTO);
+		if (hdr.xh_length > session->cmd_max_bytes)
+			return (EPROTO);
 
 		session->keep_alive = smb_keep_alive;
 
@@ -728,7 +730,8 @@ smb_session_create(ksocket_t new_so, uint16_t port, smb_server_t *sv,
 
 	session->cur_credits = session->s_cfg.skc_initial_credits;
 	session->max_credits = session->s_cfg.skc_maximum_credits;
-	/* This may increase in SMB2 negotiate. */
+	/* These may increase in SMB2 negotiate. */
+	session->cmd_max_bytes = smb_maxbufsize;
 	session->reply_max_bytes = smb_maxbufsize;
 
 	session->s_magic = SMB_SESSION_MAGIC;
@@ -1313,6 +1316,7 @@ smb_request_alloc(smb_session_t *session, int req_length)
 	smb_request_t	*sr;
 
 	ASSERT(session->s_magic == SMB_SESSION_MAGIC);
+	ASSERT(req_length <= session->cmd_max_bytes);
 
 	sr = kmem_cache_alloc(smb_cache_request, KM_SLEEP);
 

@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -428,6 +428,8 @@ smb_server_create(void)
 	cv_init(&sv->sv_cv, NULL, CV_DEFAULT, NULL);
 	cv_init(&sv->sp_info.sp_cv, NULL, CV_DEFAULT, NULL);
 
+	smb_threshold_init(&sv->sv_ssetup_ct, SMB_SSETUP_CMD,
+	    smb_ssetup_threshold, smb_ssetup_timeout);
 	smb_threshold_init(&sv->sv_tcon_ct, SMB_TCON_CMD,
 	    smb_tcon_threshold, smb_tcon_timeout);
 	smb_threshold_init(&sv->sv_opipe_ct, SMB_OPIPE_CMD,
@@ -495,6 +497,7 @@ smb_server_delete(void)
 	smb_llist_remove(&smb_servers, sv);
 	smb_llist_exit(&smb_servers);
 
+	smb_threshold_fini(&sv->sv_ssetup_ct);
 	smb_threshold_fini(&sv->sv_tcon_ct);
 	smb_threshold_fini(&sv->sv_opipe_ct);
 
@@ -1407,6 +1410,7 @@ smb_server_shutdown(smb_server_t *sv)
 	 * wait for such threads to get out.
 	 */
 	smb_event_cancel(sv, 0);
+	smb_threshold_wake_all(&sv->sv_ssetup_ct);
 	smb_threshold_wake_all(&sv->sv_tcon_ct);
 	smb_threshold_wake_all(&sv->sv_opipe_ct);
 

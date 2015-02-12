@@ -696,7 +696,7 @@ smbd_dop_get_dcinfo(smbd_arg_t *arg)
 	if (!smb_domain_getinfo(&dxi))
 		return (SMB_DOP_EMPTYBUF);
 
-	arg->rbuf = smb_string_encode(dxi.d_dc, &arg->rsize);
+	arg->rbuf = smb_string_encode(dxi.d_dci.dc_name, &arg->rsize);
 
 	if (arg->rbuf == NULL)
 		return (SMB_DOP_ENCODE_ERROR);
@@ -831,7 +831,7 @@ smbd_dop_ads_find_host(smbd_arg_t *arg)
 	if (smb_string_decode(&fqdn, arg->data, arg->datalen) != 0)
 		return (SMB_DOP_DECODE_ERROR);
 
-	if ((hinfo = smb_ads_find_host(fqdn.buf, NULL)) != NULL)
+	if ((hinfo = smb_ads_find_host(fqdn.buf)) != NULL)
 		hostname = hinfo->name;
 
 	xdr_free(smb_string_xdr, (char *)&fqdn);

@@ -60,6 +60,7 @@ _krb5_override_service_locator(
 	_NOTE(ARGUNUSED(arg0))
 	char myfqdom[MAXHOSTNAMELEN];
 	smb_ads_host_info_t *host = NULL;
+	smb_domainex_t dxi;
 	int rc = KRB5_PLUGIN_NO_HANDLE;
 	short port;
 
@@ -83,17 +84,29 @@ _krb5_override_service_locator(
 	}
 
 	/*
+	 * What's my domain?  Note: have to get this in a way
+	 * that works while join domain is underway.
+	 */
+	if (!smb_domain_getinfo(&dxi)) {
+		smbd_report("_krb5_override_service_locator "
+		    "failed getting domain info");
+		return (KRB5_ERR_HOST_REALM_UNKNOWN);
+	}
+
+	/*
 	 * Is this a realm we want to override?
 	 */
-	(void) smb_getfqdomainname(myfqdom, MAXHOSTNAMELEN);
-	if (0 != strcasecmp(realm, myfqdom))
+	if (0 != strcasecmp(realm, dxi.d_primary.di_fqname)) {
+		syslog(LOG_DEBUG, "_krb5_override_service_locator, "
+		    "realm=%s, fqdn=%s", realm, dxi.d_primary.di_fqname);
 		return (rc);
+	}
 
 	/*
 	 * Yes, this is our domain.  Have a DC?
 	 */
-	host = smb_ads_find_host(myfqdom, NULL);
-	if (host == NULL)
+	if (dxi.d_dci.dc_name[0] == '\0' ||
+	    dxi.d_dci.dc_addr.a_family == 0)
 		return (KRB5_REALM_CANT_RESOLVE);
 
 	switch (family) {
@@ -101,26 +114,28 @@ _krb5_override_service_locator(
 		break;	/* OK */
 	case AF_INET:
 	case AF_INET6:
-		if (family == host->ipaddr.a_family)
+		if (family == dxi.d_dci.dc_addr.a_family)
 			break;	/* OK */
 		/* else fallthrough */
 	default:
-		rc = KRB5_ERR_NO_SERVICE;
-		goto out;
+		return (KRB5_ERR_NO_SERVICE);
 	}
 
 	/*
 	 * Provide the service address we have.
 	 */
-	switch (host->ipaddr.a_family) {
+	switch (dxi.d_dci.dc_addr.a_family) {
 	case AF_INET: {
 		struct sockaddr_in sin;
 		(void) memset(&sin, 0, sizeof (sin));
 		sin.sin_family = AF_INET;
 		sin.sin_port = port;
-		(void) memcpy(&sin.sin_addr, &host->ipaddr.a_ipv4,
+		(void) memcpy(&sin.sin_addr, &dxi.d_dci.dc_addr.a_ipv4,
 		    sizeof (sin.sin_addr));
 		rc = cbfunc(cbdata, socktype, (struct sockaddr *)&sin);
+		/* rc from cbfunc is special. */
+		if (rc)
+			rc = ENOMEM;
 		break;
 	}
 	case AF_INET6: {
@@ -128,21 +143,18 @@ _krb5_override_service_locator(
 		(void) memset(&sin6, 0, sizeof (sin6));
 		sin6.sin6_family = AF_INET6;
 		sin6.sin6_port = port;
-		(void) memcpy(&sin6.sin6_addr, &host->ipaddr.a_ipv6,
+		(void) memcpy(&sin6.sin6_addr, &dxi.d_dci.dc_addr.a_ipv6,
 		    sizeof (sin6.sin6_addr));
 		rc = cbfunc(cbdata, socktype, (struct sockaddr *)&sin6);
+		/* rc from cbfunc is special. */
+		if (rc)
+			rc = ENOMEM;
 		break;
 	}
 	default:
 		rc = KRB5_ERR_NO_SERVICE;
-		goto out;
+		break;
 	}
-	/* rc from cbfunc is special. */
-	if (rc)
-		rc = ENOMEM;
-
-out:
-	free(host);
 
 	return (rc);
 }

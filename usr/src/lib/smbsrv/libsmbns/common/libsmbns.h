@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2012, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef	_LIBSMBNS_H
@@ -108,7 +108,11 @@ extern int smb_ads_add_share(smb_ads_handle_t *, const char *, const char *,
 extern smb_adjoin_status_t smb_ads_join(char *, char *, char *, char *);
 extern void smb_ads_join_errmsg(smb_adjoin_status_t);
 extern boolean_t smb_ads_lookup_msdcs(char *, char *, char *, uint32_t);
-extern smb_ads_host_info_t *smb_ads_find_host(char *, char *);
+extern smb_ads_status_t smb_ads_join(char *, char *, char *, char *);
+extern void smb_ads_log_errmsg(smb_ads_status_t);
+extern const char *smb_ads_strerror(int);
+extern uint32_t smb_ads_lookup_msdcs(char *, smb_dcinfo_t *);
+extern smb_ads_host_info_t *smb_ads_find_host(char *);
 
 /* DYNDNS functions */
 extern void *dyndns_publisher(void *);

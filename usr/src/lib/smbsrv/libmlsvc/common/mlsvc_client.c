@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2012, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -43,6 +43,7 @@
 
 #include <netsmb/smbfs_api.h>
 #include <smbsrv/libsmb.h>
+#include <smbsrv/libsmbns.h>
 #include <smbsrv/libmlrpc.h>
 #include <smbsrv/libmlsvc.h>
 #include <smbsrv/ndl/srvsvc.ndl>
@@ -85,6 +86,11 @@ ndr_rpc_bind(mlsvc_handle_t *handle, char *server, char *domain,
 	    domain == NULL || username == NULL)
 		return (-1);
 
+	/* Find callers passing "" and fix them... */
+	assert(server[0] != '\0');
+	if (server[0] == '\0')
+		return (-1);
+
 	if ((svc = ndr_svc_lookup_name(service)) == NULL)
 		return (-1);
 
@@ -119,6 +125,8 @@ ndr_rpc_bind(mlsvc_handle_t *handle, char *server, char *domain,
 		    "(Srv=%s Dom=%s User=%s), %s (0x%x)",
 		    server, domain, username,
 		    xlate_nt_status(rc), rc);
+		/* Tell the DC Locator this DC failed. */
+		smb_ddiscover_bad_dc(server);
 		goto errout;
 	}
 

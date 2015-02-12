@@ -20,6 +20,7 @@
 #include <strings.h>
 #include <err.h>
 #include <ads/dsgetdc.h>
+#include <smb/nterror.h>
 #include <uuid/uuid.h>
 
 
@@ -138,30 +139,50 @@ cmd_dsgetdcname(char *domname)
 {
 	char uuid_buf[UUID_PRINTABLE_STRING_LENGTH];
 	int err = 0;
+	char *atype;
 	DOMAIN_CONTROLLER_INFO *dcinfo;
 
-	(void) printf("  Domain name supplied:  %s \n", domname);
+	if (domname != NULL)
+		(void) printf("  Domain name supplied:  %s \n", domname);
 
 	err = DsGetDcName(NULL, domname, NULL, NULL, 0, &dcinfo);
 
-	if (err) {
-		(void) printf("err = 0x%x \n", err);
+	switch (err) {
+	case 0:
+		break;
+	case ERROR_NO_SUCH_DOMAIN:
+		(void) printf("Domain controller not found.\n");
+		(void) printf("See: /var/run/idmap/discovery.log\n");
+		exit(1);
+	default:
+		(void) printf("Unexpected error %d\n", err);
 		exit(1);
 	}
+
+	switch (dcinfo->DomainControllerAddressType) {
+	case DS_INET_ADDRESS:
+		atype = "inet";
+		break;
+	case DS_NETBIOS_ADDRESS:
+		atype = "netbios";
+		break;
+	default:
+		atype = "?";
+		break;
+	}
+
 	uuid_unparse(dcinfo->DomainGuid, uuid_buf);
 
 	(void) printf("Data Returned from DsGetDcName() call: \n");
 	(void) printf("  DC Name:  %s \n", dcinfo->DomainControllerName);
 	(void) printf("  DC Addr:  %s \n", dcinfo->DomainControllerAddress);
-	(void) printf("  DC Addr Type:  %d \n",
-	    dcinfo->DomainControllerAddressType);
+	(void) printf("  DC Addr Type:  %s \n", atype);
 	(void) printf("  Domain Name:  %s \n", dcinfo->DomainName);
 	(void) printf("  Domain GUID:  %s \n", uuid_buf);
 	(void) printf("  DNS Forest Name:  %s \n", dcinfo->DnsForestName);
 	(void) printf("  Flags:  0x%x \n", dcinfo->Flags);
 	(void) printf("  DC Site Name:  %s \n", dcinfo->DcSiteName);
 	(void) printf("  Client Site Name:  %s \n", dcinfo->ClientSiteName);
-
 
 	return (0);
 }
@@ -200,16 +221,20 @@ help(void) {
 	 * a copy-paste from:
 	 *   http://technet.microsoft.com/en-us/library/cc731935.aspx
 	 */
-	(void) printf(gettext("usage: %s subcommand\n"), (char *)getexecname());
+	(void) printf(gettext("usage: %s /subcommand\n"),
+	    (char *)getexecname());
 	(void) printf(gettext("where subcommands are:\n"
+#if 0	/* not yet */
 		" dclist        Lists all domain controllers in the domain.\n"
 		" dcname        Lists the PDC or PDC emulator.\n"
 		" dsgetdc       Queries DNS server for list of DCs and"
 			" their IP addresses and contacts each DC to check"
 			" for connectivity.\n"
+#endif
 		" dsgetdcname   returns the name of a domain controller in a"
 			" specified domain\n"
 		" help          display help on specified subcommand\n"
+		" kick          trigger domain controller re-discovery\n"
 		"\n"));
 	exit(1);
 }

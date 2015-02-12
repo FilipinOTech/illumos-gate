@@ -22,7 +22,7 @@
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  *
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -780,15 +780,22 @@ smb_mbc_encodef(mbuf_chain_t *mbc, const char *fmt, ...)
 int
 smb_mbc_poke(mbuf_chain_t *mbc, int offset, const char *fmt, ...)
 {
-	int		xx;
+	int		xx, len, rc;
 	mbuf_chain_t	tmp;
 	va_list		ap;
 
-	(void) MBC_SHADOW_CHAIN(&tmp, mbc, offset, mbc->max_bytes - offset);
+	if ((len = mbc->max_bytes - offset) < 0)
+		return (DECODE_NO_MORE_DATA);
+	rc = MBC_SHADOW_CHAIN(&tmp, mbc, offset, len);
+	if (rc)
+		return (DECODE_NO_MORE_DATA);
+
 	va_start(ap, fmt);
 	xx = smb_mbc_vencodef(&tmp, fmt, ap);
+	rc = smb_mbc_vencodef(&tmp, fmt, ap);
 	va_end(ap);
-	return (xx);
+
+	return (rc);
 }
 
 /*

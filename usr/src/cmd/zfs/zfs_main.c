@@ -494,6 +494,7 @@ add_unique_option(nvlist_t *props, char *propname)
 static int
 parseprop(nvlist_t *props, char *propname)
 {
+	propname = optarg;
 	char *propval, *strval;
 
 	if ((propval = strchr(propname, '=')) == NULL) {
@@ -522,7 +523,7 @@ parse_depth(char *opt, int *flags)
 	depth = (int)strtol(opt, &tmp, 0);
 	if (*tmp) {
 		(void) fprintf(stderr,
-		    gettext("%s is not an integer\n"), opt);
+		    gettext("%s is not an integer\n"), optarg);
 		usage(B_FALSE);
 	}
 	if (depth < 0) {
@@ -2393,6 +2394,7 @@ userspace_cb(void *arg, const char *domain, uid_t rid, uint64_t space)
 		uid_t id;
 		int err;
 		int flag = IDMAP_REQ_FLG_USE_CACHE;
+		idmap_stat stat;
 
 		smbentity = B_TRUE;
 
@@ -2409,13 +2411,12 @@ userspace_cb(void *arg, const char *domain, uid_t rid, uint64_t space)
 		if (err == 0) {
 			rid = id;
 			if (!cb->cb_sid2posix) {
-				if (type == USTYPE_SMB_USR) {
-					(void) idmap_getwinnamebyuid(rid, flag,
+				if (type == USTYPE_SMB_USR)
+					stat = idmap_getwinnamebyuid(rid, flag,
 					    &name, NULL);
-				} else {
-					(void) idmap_getwinnamebygid(rid, flag,
+				else
+					stat = idmap_getwinnamebygid(rid, flag,
 					    &name, NULL);
-				}
 				if (name == NULL)
 					name = sid;
 			}

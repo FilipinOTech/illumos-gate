@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/types.h>
@@ -242,6 +242,30 @@ vncache_enter(struct stat *st, vnode_t *dvp, char *name, int fd)
 	}
 
 	return (new_vp);
+}
+
+/*
+ * Called after a successful rename to update v_path
+ */
+void
+vncache_renamed(vnode_t *vp, vnode_t *to_dvp, char *to_name)
+{
+	char *vpath;
+	char *ovpath;
+	int len;
+
+	len = strlen(to_name) + 1;
+	/* add to length for parent path + "/" */
+	len += (strlen(to_dvp->v_path) + 1);
+	vpath = kmem_alloc(len, KM_SLEEP);
+	(void) snprintf(vpath, len, "%s/%s", to_dvp->v_path, to_name);
+
+	mutex_enter(&vncache_lock);
+	ovpath = vp->v_path;
+	vp->v_path = vpath;
+	mutex_exit(&vncache_lock);
+
+	strfree(ovpath);
 }
 
 /*

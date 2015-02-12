@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -514,6 +514,9 @@ smb_set_standard_info(smb_request_t *sr, smb_setinfo_t *sinfo)
 /*
  * smb_set_rename_info
  *
+ * This call only allows a rename in the same directory, and the
+ * directory name is not part of the new name provided.
+ *
  * Explicitly specified parameter validation rules:
  * - If rootdir is not NULL respond with NT_STATUS_INVALID_PARAMETER.
  * - If the filename contains a separator character respond with
@@ -526,7 +529,10 @@ smb_set_standard_info(smb_request_t *sr, smb_setinfo_t *sinfo)
 static uint32_t
 smb_set_rename_info(smb_request_t *sr, smb_setinfo_t *sinfo)
 {
+	smb_fqi_t *src_fqi = &sr->arg.dirop.fqi;
+	smb_fqi_t *dst_fqi = &sr->arg.dirop.dst_fqi;
 	char *fname;
+	char *path;
 	uint8_t flags;
 	uint32_t rootdir, namelen;
 	uint32_t status = 0;
@@ -549,9 +555,35 @@ smb_set_rename_info(smb_request_t *sr, smb_setinfo_t *sinfo)
 		return (NT_STATUS_NOT_SUPPORTED);
 	}
 
-	rc = smb_setinfo_rename(sr, sinfo->si_node, fname, flags);
-	if (rc != 0)
-		status = smb_errno2status(rc);
+	/*
+	 * Construct the full dst. path relative to the share root.
+	 * Allocated path is free'd in smb_request_free.
+	 */
+	path = smb_srm_zalloc(sr, SMB_MAXPATHLEN);
+	if (src_fqi->fq_path.pn_pname) {
+		/* Got here via: smb_set_by_path */
+		(void) snprintf(path, SMB_MAXPATHLEN, "%s\\%s",
+		    src_fqi->fq_path.pn_pname, fname);
+	} else {
+		/* Got here via: smb_set_by_fid */
+		rc = smb_node_getshrpath(sinfo->si_node->n_dnode,
+		    sr->tid_tree, path, SMB_MAXPATHLEN);
+		if (rc != 0) {
+			status = smb_errno2status(rc);
+			return (status);
+		}
+		(void) strlcat(path, "\\", SMB_MAXPATHLEN);
+		(void) strlcat(path, fname, SMB_MAXPATHLEN);
+	}
 
+	/*
+	 * The common rename code can slightly optimize a
+	 * rename in the same directory when we set the
+	 * dst_fqi->fq_dnode, dst_fqi->fq_last_comp
+	 */
+	dst_fqi->fq_dnode = sinfo->si_node->n_dnode;
+	(void) strlcpy(dst_fqi->fq_last_comp, fname, MAXNAMELEN);
+
+	status = smb_setinfo_rename(sr, sinfo->si_node, path, flags);
 	return (status);
 }

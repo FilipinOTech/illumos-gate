@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2012, 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -94,6 +94,7 @@ netlogon_auth(char *server, mlsvc_handle_t *netr_handle, DWORD flags)
 	if (rc != 0)
 		return (NT_STATUS_UNSUCCESSFUL);
 
+	/* server is our DC.  Note: normally an FQDN. */
 	(void) snprintf(netr_info->server, sizeof (netr_info->server),
 	    "\\\\%s", server);
 
@@ -195,9 +196,10 @@ static int
 netr_server_authenticate2(mlsvc_handle_t *netr_handle, netr_info_t *netr_info)
 {
 	struct netr_ServerAuthenticate2 arg;
+	/* sizeof netr_info->hostname, + 1 for the '$' */
+	char account_name[(NETBIOS_NAME_SZ * 2) + 1];
 	int opnum;
 	int rc;
-	char account_name[NETBIOS_NAME_SZ * 2];
 
 	bzero(&arg, sizeof (struct netr_ServerAuthenticate2));
 	opnum = NETR_OPNUM_ServerAuthenticate2;
