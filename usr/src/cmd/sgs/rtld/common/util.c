@@ -628,17 +628,17 @@ is_dep_init(Rt_map *dlmp, Rt_map *clmp)
 	if ((dlmp == clmp) || (rtld_flags & RT_FL_INITFIRST))
 		return;
 
-	rt_mutex_lock(&dlmp->rt_lock);
+	(void) rt_mutex_lock(&dlmp->rt_lock);
 	while (dlmp->rt_init_thread != rt_thr_self() && (FLAGS(dlmp) &
 	    (FLG_RT_RELOCED | FLG_RT_INITCALL | FLG_RT_INITDONE)) ==
 	    (FLG_RT_RELOCED | FLG_RT_INITCALL)) {
 		leave(LIST(dlmp), 0);
 		(void) _lwp_cond_wait(&dlmp->rt_cv, (mutex_t *)&dlmp->rt_lock);
-		rt_mutex_unlock(&dlmp->rt_lock);
+		(void) rt_mutex_unlock(&dlmp->rt_lock);
 		(void) enter(0);
-		rt_mutex_lock(&dlmp->rt_lock);
+		(void) rt_mutex_lock(&dlmp->rt_lock);
 	}
-	rt_mutex_unlock(&dlmp->rt_lock);
+	(void) rt_mutex_unlock(&dlmp->rt_lock);
 
 	if ((FLAGS(dlmp) & (FLG_RT_RELOCED | FLG_RT_INITDONE)) ==
 	    (FLG_RT_RELOCED | FLG_RT_INITDONE))
@@ -760,11 +760,11 @@ call_init(Rt_map **tobj, int flag)
 		 * signifies that a .fini must be called should it exist.
 		 * Clear the sort field for use in later .fini processing.
 		 */
-		rt_mutex_lock(&lmp->rt_lock);
+		(void) rt_mutex_lock(&lmp->rt_lock);
 		FLAGS(lmp) |= FLG_RT_INITDONE;
 		lmp->rt_init_thread = (thread_t)0;
-		_lwp_cond_broadcast(&lmp->rt_cv);
-		rt_mutex_unlock(&lmp->rt_lock);
+		(void) _lwp_cond_broadcast(&lmp->rt_cv);
+		(void) rt_mutex_unlock(&lmp->rt_lock);
 		SORTVAL(lmp) = -1;
 
 		/*
@@ -1603,7 +1603,8 @@ ld_generic_env(const char *s1, size_t len, const char *s2, Word *lmflags,
 		if ((len == MSG_LD_FLAGS_SIZE) && (strncmp(s1,
 		    MSG_ORIG(MSG_LD_FLAGS), MSG_LD_FLAGS_SIZE) == 0)) {
 			select |= SEL_ACT_SPEC_1;
-			str = &rpl_ldflags;
+			str = (select & SEL_REPLACE) ? &rpl_ldflags :
+			    &prm_ldflags;
 			variable = ENV_FLG_FLAGS;
 		}
 	}

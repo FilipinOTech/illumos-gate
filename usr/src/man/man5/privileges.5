@@ -4,7 +4,7 @@
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License"). You may not use this file except in compliance with the License. You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.
 .\"  See the License for the specific language governing permissions and limitations under the License. When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE. If applicable, add the following below this CDDL HEADER, with
 .\" the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH PRIVILEGES 5 "March 7, 2012"
+.TH PRIVILEGES 5 "Feb 3, 2015"
 .SH NAME
 privileges \- process privilege model
 .SH DESCRIPTION
@@ -194,6 +194,16 @@ Extensions.
 .sp
 .ne 2
 .na
+\fB\fBPRIV_FILE_FLAG_SET\fR\fR
+.ad
+.sp .6
+.RS 4n
+Allows a process to set immutable, nounlink or appendonly file attributes.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBPRIV_FILE_LINK_ANY\fR\fR
 .ad
 .sp .6
@@ -217,6 +227,16 @@ whose parent directory has the "save text image after execution" (sticky) bit
 set. Allow a process that is not the owner of a file to mount a \fBnamefs\fR
 upon that file. Allow a process that is not the owner of a file or directory to
 modify that file's or directory's permission bits or ACL.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBPRIV_FILE_READ\fR\fR
+.ad
+.sp .6
+.RS 4n
+Allow a process to read objects in the filesystem.
 .RE
 
 .sp
@@ -257,6 +277,16 @@ Extensions.
 .sp .6
 .RS 4n
 Allows a process to set immutable, nounlink or appendonly file attributes.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBPRIV_FILE_WRITE\fR\fR
+.ad
+.sp .6
+.RS 4n
+Allow a process to modify objects in the filesytem.
 .RE
 
 .sp
@@ -331,6 +361,16 @@ Segment.
 .sp
 .ne 2
 .na
+\fB\fBPRIV_NET_ACCESS\fR\fR
+.ad
+.sp .6
+.RS 4n
+Allow a process to open a TCP, UDP, SDP, or SCTP network endpoint.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBPRIV_NET_BINDMLP\fR\fR
 .ad
 .sp .6
@@ -371,6 +411,21 @@ runs in the global zone.
 .sp
 This privilege is interpreted only if the system is configured with Trusted
 Extensions.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBPRIV_NET_MAC_IMPLICIT\fR\fR
+.ad
+.sp .6
+.RS 4n
+Allow a proces to set \fBSO_MAC_IMPLICIT\fR option by using
+\fBsetsockopt\fR(3SOCKET).  This allows a privileged process to transmit
+implicitly-labeled packets to a peer.
+.sp
+This privilege is interpreted only if the system is configured with
+Trusted Extensions.
 .RE
 
 .sp
@@ -655,6 +710,16 @@ anchored \fBSTREAM\fRs modules with matching \fBzoneid\fR.
 .sp .6
 .RS 4n
 Allow a process to increase the size of a System V IPC Message Queue buffer.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBPRIV_SYS_IPTUN_CONFIG\fR\fR
+.ad
+.sp .6
+.RS 4n
+Allow a process to configure IP tunnel links.
 .RE
 
 .sp
