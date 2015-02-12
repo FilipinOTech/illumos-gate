@@ -1,12 +1,13 @@
 '\" te
 .\" Copyright 1989 AT&T.
 .\" Copyright (C) 2004, Sun Microsystems, Inc. All Rights Reserved.
+.\" Copyright (C) 2014, Joyent, Inc. All Rights Reserved.
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
 .\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
 .\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH ETHERS 3SOCKET "Apr 5, 2004"
+.TH ETHERS 3SOCKET "Aug 9, 2014"
 .SH NAME
-ethers, ether_ntoa, ether_aton, ether_ntohost, ether_hostton, ether_line \-
+ethers, ether_ntoa, ether_ntoa_r, ether_aton, ether_aton_r, ether_ntohost, ether_hostton, ether_line \-
 Ethernet address mapping operations
 .SH SYNOPSIS
 .LP
@@ -20,7 +21,17 @@ Ethernet address mapping operations
 
 .LP
 .nf
+\fBchar *\fR\fBether_ntoa_r\fR(\fBconst struct ether_addr *\fR\fIe\fR, \fBchar *\fR\fIs\fR);
+.fi
+
+.LP
+.nf
 \fBstruct ether_addr *\fR\fBether_aton\fR(\fBconst char *\fR\fIs\fR);
+.fi
+
+.LP
+.nf
+\fBstruct ether_addr *\fR\fBether_aton_r\fR(\fBconst char *\fR\fIs\fR, \fBstruct ether_addr *\fR\fIe\fR);
 .fi
 
 .LP
@@ -53,6 +64,18 @@ the  \fBASCII\fR string.  The representation is of the form
 \fBether_aton()\fR converts an \fBASCII\fR string in the standard
 representation back to a 48 bit Ethernet number;  the function returns
 \fINULL\fR if the string cannot be scanned successfully.
+.sp
+.LP
+The functions \fBether_ntoa()\fR and \fBether_aton()\fR return values in
+per-thread buffers, one for each function. A second call to one of these
+functions will overwrite the previous value. The functions
+\fBether_ntoa_r()\fR and \fBether_aton_r()\fR behave identically to
+their non-reentrant versions; however, instead of using a per-thread
+buffer, they use caller-supplied buffers. It is the caller's
+responsibility to ensure that the character buffer passed to
+\fBether_ntoa_r()\fR is at least \fBETHERADDRSTRL\fR bytes large -- the
+minimum size to hold the ASCII representation of a 48 bit Ethernet
+number and a \fINULL\fR terminator.
 .sp
 .LP
 The function \fBether_ntohost()\fR maps an Ethernet number (pointed to by

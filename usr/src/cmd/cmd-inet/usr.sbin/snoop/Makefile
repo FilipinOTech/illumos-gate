@@ -39,12 +39,14 @@ OBJS=	nfs4_xdr.o snoop.o snoop_aarp.o snoop_adsp.o snoop_aecho.o \
 	snoop_pppoe.o snoop_rip.o snoop_rip6.o snoop_rpc.o snoop_rpcprint.o \
 	snoop_rpcsec.o snoop_rport.o snoop_rquota.o snoop_rstat.o snoop_rtmp.o \
 	snoop_sctp.o snoop_slp.o snoop_smb.o snoop_socks.o snoop_solarnet.o \
-	snoop_tcp.o snoop_tftp.o snoop_trill.o snoop_udp.o snoop_zip.o
+	snoop_tcp.o snoop_tftp.o snoop_trill.o snoop_udp.o snoop_vxlan.o \
+	snoop_zip.o
 
 SRCS=	$(OBJS:.o=.c)
 HDRS=	snoop.h snoop_mip.h at.h snoop_ospf.h snoop_ospf6.h
 
 include	../../../Makefile.cmd
+include ../../../Makefile.ctf
 
 CPPFLAGS += -I. -I$(SRC)/common/net/dhcp \
 	-D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64

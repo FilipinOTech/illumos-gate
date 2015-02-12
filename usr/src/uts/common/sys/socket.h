@@ -22,6 +22,7 @@
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
  *
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015, Joyent, Inc. All rights reserved.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -39,6 +40,9 @@
 
 /* Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved. */
 
+/*
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
+ */
 #ifndef	_SYS_SOCKET_H
 #define	_SYS_SOCKET_H
 
@@ -293,8 +297,9 @@ struct	linger {
 #define	AF_INET_OFFLOAD	30		/* Sun private; do not use */
 #define	AF_TRILL	31		/* TRILL interface */
 #define	AF_PACKET	32		/* PF_PACKET Linux socket interface */
+#define	AF_LX_NETLINK	33		/* Linux-compatible netlink */
 
-#define	AF_MAX		32
+#define	AF_MAX		33
 
 /*
  * Protocol families, same as address families for now.
@@ -334,6 +339,7 @@ struct	linger {
 #define	PF_INET_OFFLOAD	AF_INET_OFFLOAD	/* Sun private; do not use */
 #define	PF_TRILL	AF_TRILL
 #define	PF_PACKET	AF_PACKET
+#define	PF_LX_NETLINK	AF_LX_NETLINK
 
 #define	PF_MAX		AF_MAX
 
@@ -420,6 +426,7 @@ struct msghdr32 {
 #define	MSG_NOTIFICATION 0x100		/* Notification, not data */
 #define	MSG_XPG4_2	0x8000		/* Private: XPG4.2 flag */
 
+/* Obsolete but kept for compilation compatability. Use IOV_MAX. */
 #define	MSG_MAXIOVLEN	16
 
 #ifdef _KERNEL

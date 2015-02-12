@@ -25,6 +25,10 @@
 # Copyright 2013 Joyent, Inc. All rights reserved
 #
 
+hook4_vnd_in
+hook4_vnd_out
+hook6_vnd_in
+hook6_vnd_out
 fr_availfuncs
 fr_features
 fr_objbytes

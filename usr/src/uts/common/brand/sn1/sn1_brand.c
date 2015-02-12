@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015 Joyent, Inc. All rights reserved.
  */
 
 #include <sys/errno.h>
@@ -48,7 +49,7 @@ void	sn1_setbrand(proc_t *);
 int	sn1_getattr(zone_t *, int, void *, size_t *);
 int	sn1_setattr(zone_t *, int, void *, size_t);
 int	sn1_brandsys(int, int64_t *, uintptr_t, uintptr_t, uintptr_t,
-		uintptr_t, uintptr_t, uintptr_t);
+		uintptr_t, uintptr_t);
 void	sn1_copy_procdata(proc_t *, proc_t *);
 void	sn1_proc_exit(struct proc *, klwp_t *);
 void	sn1_exec();
@@ -78,7 +79,12 @@ struct brand_ops sn1_brops = {
 	sn1_elfexec,
 	NULL,
 	NULL,
+	NULL,
 	NSIG,
+	NULL,
+	NULL,
+	NULL,
+	NULL
 };
 
 #ifdef	sparc
@@ -94,9 +100,12 @@ struct brand_mach_ops sn1_mops = {
 
 struct brand_mach_ops sn1_mops = {
 	sn1_brand_sysenter_callback,
+	NULL,
 	sn1_brand_int91_callback,
 	sn1_brand_syscall_callback,
-	sn1_brand_syscall32_callback
+	sn1_brand_syscall32_callback,
+	NULL,
+	NULL
 };
 
 #else	/* ! __amd64 */
@@ -104,7 +113,10 @@ struct brand_mach_ops sn1_mops = {
 struct brand_mach_ops sn1_mops = {
 	sn1_brand_sysenter_callback,
 	NULL,
+	NULL,
 	sn1_brand_syscall_callback,
+	NULL,
+	NULL,
 	NULL
 };
 #endif	/* __amd64 */
@@ -115,7 +127,8 @@ struct brand	sn1_brand = {
 	BRAND_VER_1,
 	"sn1",
 	&sn1_brops,
-	&sn1_mops
+	&sn1_mops,
+	sizeof (brand_proc_data_t),
 };
 
 static struct modlbrand modlbrand = {
@@ -151,7 +164,7 @@ sn1_setattr(zone_t *zone, int attr, void *buf, size_t bufsize)
 /*ARGSUSED*/
 int
 sn1_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
-    uintptr_t arg3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6)
+    uintptr_t arg3, uintptr_t arg4, uintptr_t arg5)
 {
 	int	res;
 
@@ -225,7 +238,7 @@ sn1_elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 {
 	return (brand_solaris_elfexec(vp, uap, args, idatap, level, execsz,
 	    setid, exec_file, cred, brand_action, &sn1_brand, SN1_BRANDNAME,
-	    SN1_LIB, SN1_LIB32, SN1_LINKER, SN1_LINKER32));
+	    SN1_LIB, SN1_LIB32));
 }
 
 int

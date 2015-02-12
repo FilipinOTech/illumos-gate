@@ -22,6 +22,7 @@
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2013, Joyent, Inc. All rights reserved.
 # Copyright 2013 Garrett D'Amore <garrett@damore.org>
+# Copyright 2015, Joyent, Inc. All rights reserved.
 #
 
 include $(SRC)/uts/Makefile.uts
@@ -212,6 +213,7 @@ CHKHDRS=			\
 	emul64cmd.h		\
 	emul64var.h		\
 	epm.h			\
+	epoll.h			\
 	errno.h			\
 	errorq.h		\
 	errorq_impl.h		\
@@ -219,6 +221,7 @@ CHKHDRS=			\
 	ethernet.h		\
 	euc.h			\
 	eucioctl.h		\
+	eventfd.h		\
 	exacct.h		\
 	exacct_catalog.h	\
 	exacct_impl.h		\
@@ -243,6 +246,7 @@ CHKHDRS=			\
 	flock.h			\
 	flock_impl.h		\
 	fork.h			\
+	frameio.h		\
 	fss.h			\
 	fsspriocntl.h		\
 	fsid.h			\
@@ -268,6 +272,7 @@ CHKHDRS=			\
 	idmap.h 		\
 	ieeefp.h		\
 	id_space.h		\
+	inotify.h		\
 	instance.h		\
 	int_const.h		\
 	int_fmtio.h		\
@@ -336,6 +341,7 @@ CHKHDRS=			\
 	lgrp.h			\
 	lgrp_user.h		\
 	libc_kernel.h		\
+	limits.h		\
 	link.h			\
 	list.h			\
 	list_impl.h		\
@@ -416,6 +422,9 @@ CHKHDRS=			\
 	ontrap.h		\
 	open.h			\
 	openpromio.h		\
+	overlay.h		\
+	overlay_common.h	\
+	overlay_target.h	\
 	panic.h			\
 	param.h			\
 	pathconf.h		\
@@ -635,6 +644,8 @@ CHKHDRS=			\
 	vmem.h			\
 	vmem_impl.h		\
 	vmsystm.h		\
+	vnd.h			\
+	vnd_errno.h		\
 	vnic.h			\
 	vnic_impl.h		\
 	vnode.h			\
@@ -646,12 +657,14 @@ CHKHDRS=			\
 	vuid_queue.h		\
 	vuid_state.h		\
 	vuid_store.h		\
+	vxlan.h			\
 	wait.h			\
 	waitq.h			\
 	wanboot_impl.h		\
 	watchpoint.h		\
 	winlockio.h		\
 	zcons.h			\
+	zfd.h			\
 	zone.h			\
 	xti_inet.h		\
 	xti_osi.h		\
@@ -852,13 +865,14 @@ FSHDRS=				\
 	cachefs_log.h		\
 	decomp.h		\
 	dv_node.h		\
-	sdev_impl.h		\
 	fifonode.h		\
 	hsfs_isospec.h		\
 	hsfs_node.h		\
 	hsfs_rrip.h		\
 	hsfs_spec.h		\
 	hsfs_susp.h		\
+	hyprlofs.h		\
+	hyprlofs_info.h		\
 	lofs_info.h		\
 	lofs_node.h		\
 	mntdata.h		\
@@ -868,6 +882,8 @@ FSHDRS=				\
 	pc_label.h		\
 	pc_node.h		\
 	pxfs_ki.h		\
+	sdev_impl.h		\
+	sdev_plugin.h		\
 	snode.h			\
 	swapnode.h		\
 	tmp.h			\

@@ -1,49 +1,268 @@
-illumos gate README - Sep 16, 2012.
+  ___                 _                ____       _       
+ / _ \__   _____ _ __| | __ _ _   _   / ___| __ _| |_ ___ 
+| | | \ \ / / _ \ '__| |/ _` | | | | | |  _ / _` | __/ _ \
+| |_| |\ V /  __/ |  | | (_| | |_| | | |_| | (_| | ||  __/
+ \___/  \_/ \___|_|  |_|\__,_|\__, |  \____|\__,_|\__\___|
+                              |___/                       
 
-This is the illumos gate.  This is the illumos source tree.  It contains
-the following subdirectories:
+This branch of illumos-joyent is the overlay gate. It's purpose is to
+serve as a development branch for a new dladm device called an overlay,
+whose purpose is to support encapsulation protocols like VXLAN and
+NVGRE; however, also allow for a user to supplement the protocol with
+their own means of doing discovery, rather than the pre-defined ones.
 
-	usr/src	- 		The actual source code
+## Warning
 
-	exception_lists	-	These are lists of exceptional cases
-				used to limit noise during builds.
-				Ideally this directory would consist of
-				only empty files.
+This is a work in progress, things will be changing quickly, and
+panicking is certainly not out of the question. You probably don't want
+to be using this.
 
-Integration Rules:
+## Current Status
 
-        All changes must have been reviewed, and approved by an advocate
-	(below).  A code review may be performed by someone other than the
-	advocate, but the final integration should still be approved by the
-	advocate. 
+Basic VXLAN tunnels that interoperate with not only ourselves, but also
+VXLAN, work. Configuration is done through dladm and information is
+persisted in varpd.
 
-        The advocate will want to see your webrev and hg outgoing -v.  The
-	advocate will also ask about your testing, and may ask to see your
-	build logs.
+## High-level Design Overview
 
-        All changes must adhere to typical ON style and quality rules.
-        For example, pass full cstyle, applicable lint rules, etc.
+WARNING: This is subject to change the further down the implementation
+path we get. Major changse should cause this document to be updated, but
+the author is only human and subject to time and forgetfulness.
 
-        All new code must be licensed under CDDL, and modifications to existing
-        code may not alter the original license terms.  Integrations of code
-        from upstream sources that use another liberal open source license are
-        permissible, subject to approval of the advocates or developer council.
-        Exceptions to this policy shall require the approval of the developer
-        council.
 
-        Commits should have comments of the following form:
+There have been many different attempts and solutions trying to tackle
+the space of network virtualization through the use of overlay networks.
+These networks act in similar ways to VLANs, but with two large
+differences. They have significantly larger ID spaces, and they fully
+encapsulate a layer two frame in a layer three frame with some
+additional metadata. The most common and widely used of these today is
+VXLAN and NVGRE.
 
-        1234 This is a sample bug report synopsis
-        4567 If you have a second bug synopsis…
-        Reviewed by: Frodo Baggins <frodo.baggins@underhill.net>
-        Reviewed by: Legolas <elf-coder@mirkwood.org>
-        Approved by: Gandalf The Grey <rti-advocate@white-council.com>
+While the wire formats of all of these have stabilized, the means of
+looking up another host have not. Some RFCs describe simple point to
+point tunnels or suggest the use of a single mutlicast group for each
+virtual network. While these are useful, most users will find that they
+want their own schemes that allows for alternate control and more
+dynamic mappings. For example, if a centralized database exists that
+describes the mapping between physical hosts and mac address on a given
+virtual network, this may be used to send a direct unicast message.
 
-	Each commit must have at least one bug id that is listed in the
-	illumos-gate project at www.illumos.org.
+To facilitate this, we are building something that breaks the two pieces
+apart:
+   o  encapsulation/decapsulation
+   o  determining the destination of a frame
 
-RTI Advocates:     advocates@lists.illumos.org
-Developer Council: developer-council@lists.illumos.org
 
-IRC channel:       #illumos on irc.freenode.net
-Mailing list:      developer@lists.illumos.org
+While the kernel will be in charge of the first part. This will be a new
+GLDv3 device, that looks similar to an etherstub (in so far as it
+creates a virtual switch), but will send out encapsulated data. We'll
+call that specifically a dladm overlay. An overlay device has properties
+that describe the encapsulation protocol, the overlay id, and the lookup
+scheme. It is not a true datalink itself, meaning that it cannot have an
+IP device plumbed on top of it; however, it supports things like vnics
+and the like being created over it.
+
+The second part will be handled by a userland daemon that we call
+'varpd' the virtual arp daemon. It's named this way because not only
+does it do ARP-like things, but the interface between it and the kernel
+is similar. Importantly, both pieces of this will be highly pluggable.
+The kernel will support arbitrary encapsulation and decapsulation
+modules; while, varpd will support arbitrary lookup modules that allow
+for as little or as much complexity as desired.
+
+The following image roughly describes what this looks like going out.
+
+```
+Outgoing Data Path
+
+  . . . . . . . . . . . . . . . . . . .  . . . . . . . . . . . . . . . .
+  . Kernel *                          .  . Userland *                  .
+  . ********                          .  .***********                  .
+  .                                   .  .   +---------+               .
+  .  +------------+      +---------+  .  .   | Virutal |   +--------+  .
+  .  | TCP/IP/VND |      | Overlay |=======*=| ARP     |---| Lookup |  .
+  .  +------------+   +->| Cache   |  .  . * | Daemon  |   | Plugin |  .
+  .        |          |  | Lookup  |  .  . * +---------+   | Module |  .
+  .    +------+       |  +---------+  .  . *               +--------+  .
+  .    | VNIC |       |       |       .  . * Async              |      .
+  .    +------+       |       |       .  . * Upcall             |      .
+  .        |          |       |       .  . . . . . . . . . . . .|. . . .
+  .  +------------+   |  +--------+   .                         |
+  .  |  Overlay   |->-+  | Encap  |   .                         |
+  .  |  Device    |-<----| Plugin |   .                    +---------+
+  .  +------------+      | Engine |   .                    | TCP/UDP |
+  .        |             +--------+   .                    | Katar   |
+  .  +-------------+                  .                    | Request |
+  .  | GZ IP Stack |                  .                    +---------+
+  .  +-------------+                  .
+  .        |                          .
+  .  +-----------------+              .
+  .  | GZ VNIC, 9K MTU |              .
+  .  | On Encap VLAN   |              .
+  .  | On External TAG |              .
+  .  +-----------------+              .
+  .        |                          .
+  . . . . .|. . . . . . . . . . . . . .
+           |
+  +---------------------+
+  |  Top of Rack Switch |
+  +---------------------+
+```
+
+The incoming data path is similar to the
+outgoing data path. The exact mechanisms by which it works are still a
+bit up in the air. However, what we'd ideally like to do is have the
+kernel use ksockets to listen on the appropriate interfaces for the
+configured backend, eg. for VXLAN, it'd be on a UDP port, and then use
+the decapsulation engine to get out the raw packet. Next we would send
+that back through the software classifier which will inject the frame
+into the appropriate VNICs on the overlay device. At that point, the
+packet will enter the normal processing for TCP/IP and vnd. The devil is
+in the details there, and those details need to still be determined.
+
+Importantly here, you'll note that varpd and the kernel communicate
+through an asynchronous upcall mechanism. This will look very much like
+that we do for ARP today. We will not be doing synchronous door upcalls.
+We just simply cannot block the kernel for that amount of time. Instead,
+we'll do something where varpd has threads that are basically looking
+for work which gets serviced by a taskq in the kernel.
+
+### Data walk through
+
+Let's follow what happens when a given instance sends a unicast packet
+out for which it already has an ARP record for, but has never
+communicated out over the overlay device to that recipient before. At
+this point, the IP layer or VND sends a full layer two packet down to
+DLS.  That goes through and its VLAN tag is strictly enforced on the
+packet as necessary. For this, we'll assume that we have a VXLAN device.
+
+At that point, the overlay device will then see if it has that mac
+address in its target cache. If it does, it will encapsulate and send
+out the message block.  In the more interesting case where it does not
+have that mapping, it has to contact varpd. As part of this, the current
+thread of control will basically queue this message block chain in a
+list of outstanding requests like we do for ARP, and then signal varpd.
+varpd will then look at some basic header data, e.g., overlay id, VLAN id,
+mac address, ethertype, etc.
+
+Based on the network id it will map that to its configuration
+information and use that to map to configuration information for a
+specific plug-in. While Joyent will have its own plug-in that integrates
+into the proposed SDC design, other plug-ins may exist such as: a static files
+mapping, sending all traffic to a single unicast address, or sending it
+to a multicast address. The goal is to ensure that what we
+build can be reused by the broader illumos ecosystem and allow ourselves
+greater flexibility in the future.
+
+In this case, the Joyent varpd plug-in would contact a katar caching
+server using a DNS-like protocol. The purpose of the katar caching
+server is to be the interface between the compute nodes and
+electric-moray and provide a read cache for moray. Upon receiving a
+response, it would then go through and ioctl/reply to the asynchronous
+upcall. The kernel would use that, send it through the encapsulation
+engine which would append a message block that contains the VXLAN
+header. That in turn, would then be sent through the kernel to the
+appropriate interface/socket. In this case, that would be a UDP
+connection that the kernel actively controls on top of a data
+link in the global zone. The UDP packet would be directed towards the IP
+address of the CN that contains the instance that the MAC address
+corresponded to.
+
+It would then go through the global zone's UDP/IP stack and then out
+that VNIC and physical interface. In particular, we need to ensure a few
+properties about that interface. The first, is that it's on a particular
+VLAN. The second, is that it has a 9K MTU. At that point, it would leave
+the VNIC and go out on the physical network destined for another CN on
+the VXLAN port.
+
+That CN would receive a packet on that port and the kernel's classifier
+would send it all the way to overlay device immediately. The overlay
+device would decapsulate it based on the port and ID that it was
+received on. From there, we would send it back through the
+classifier again to direct it to the appropriate soft rings, replicating
+broadcast and multicast as necessary, and then it will go through the
+normal networking stack, IP or vnd, as appropriate.
+
+If for some reason the CN received a unicast packet to which it didn't
+have a valid destination, it will fire an request to varpd to
+send an invalidation request back to the unicast address of the other CN
+that the packet came from which will also be running varpd.
+
+### dladm overlay devices and varpd
+
+I'd like to go through and spend a bit more time on the organization of
+these dladm overlay devices, varpd, and the associated encapsulation and
+lookup plug-ins.
+
+We specifically want the overlay devices in the kernel and the
+encapsulation plug-ins to be fairly dumb and not have to do very much.
+So while the kernel will have to set up the devices that it listens over
+and wire up those sockets (eg. UDP port for VXLAN, an IP type for NVGRE,
+etc.) the kernel devices and the kernel plug-ins will not know about
+what they should be directly. That will need to be something that is
+configured by userland in conjunction with varpd.
+
+The encapsulation plug-ins themselves should be very dumb and
+essentially support only two functions: an encapsulation operation and a
+decapsulation operation. They will be simple miscellaneous modules that
+depend on the broader overlay module and register with it, much like mac
+has plug-in modules for Ethernet, Infiniband, Wi-Fi, etc. This will also
+make it easier to go through and add newer encapsulation modules.
+
+In the userland side, there are a few different abstractions that we
+have with varpd. The first is a notion of a search plug-in. The search
+plug-in is responsible for determining how we find the destination host
+for a packet.  If you follow the VXLAN spec, there are two obvious
+plug-ins that it suggests, one that sends everything to a unicast
+address and one that sends everything to a multicast address. It is in
+this logic that we would write the SDC plug-in that talks to the katar
+instances.
+
+However, each of these plug-ins may have properties themselves. We'd
+like to be able to leverage the same plug-in that deals with a single
+unicast tunnel or a single multicast address, but just tweak some
+configuration parameters, e.g., what that address is.
+
+Another thing that we'd like to be able to do is to optionally define an
+out of band invalidation protocol. Ideally this would be plug and play
+with the other search protocols. Realistically, for the case of a single
+unicast or multicast tunnel, there's no reason to go ahead and use the
+invalidation protocols at all.
+
+What this suggests to me is an idea of a profile for an overlay device.
+A profile would involve the set of a specific encapsulation protocol, a
+search plug-in, and optionally an invalidation plug-in, as well as some
+metadata. For example, the metadata would include things like the
+overlay id that should be used and what series of ports need to be
+listened on. I think the way that this all plays out and what the user
+interface looks like is still up in the air; however, leaving the bulk
+of the responsibility to userland is important.
+
+As the needs of the plug-in will need to change more frequently than the
+kernel modules, we'll need to establish a module path such that we can
+reload all of the plug-ins and deliver something out of band via /opt.
+It will be important that the kernel basically needs to be able to
+survive the varpd communication mechanism going down.
+
+## Current planned deliverables
+
+Note this is entirely subject to change:
+
+  o New dladm overlay object
+  o varpd userland daemon
+  o VXLAN overlay plugin and basic point to point, multicast tunnels
+  o Improvements to the ksocket API
+  o A Joyent-specific varpd plugin for constructing dynamic mappings
+  o Some form of zone that is used to create virtual routers
+
+As a general note, while the gate has had prototypes of VXLAN, NVGRE,
+Geneve, and STT for design help, it is not likely that all will survive,
+particularly STT.
+
+## Contact
+
+For questions and more information, contact:
+
+Robert Mustacchi
+rm@joyent.com
+rmustacc on irc.freenode.net

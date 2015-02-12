@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -905,6 +905,7 @@ vfs_mountroot(void)
 	vfs_mountfs("mntfs", "/etc/mnttab", "/etc/mnttab");
 	vfs_mountfs("tmpfs", "/etc/svc/volatile", "/etc/svc/volatile");
 	vfs_mountfs("objfs", "objfs", OBJFS_ROOT);
+	vfs_mountfs("bootfs", "bootfs", "/system/boot");
 
 	if (getzoneid() == GLOBAL_ZONEID) {
 		vfs_mountfs("sharefs", "sharefs", "/etc/dfs/sharetab");
@@ -3899,6 +3900,8 @@ vfs_to_modname(const char *vfstype)
 		vfstype = "fdfs";
 	} else if (strncmp(vfstype, "nfs", 3) == 0) {
 		vfstype = "nfs";
+	} else if (strcmp(vfstype, "lxproc") == 0) {
+		vfstype = "lxprocfs";
 	}
 
 	return (vfstype);

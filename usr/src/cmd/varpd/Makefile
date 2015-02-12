@@ -1,0 +1,61 @@
+#
+# This file and its contents are supplied under the terms of the
+# Common Development and Distribution License ("CDDL"), version 1.0.
+# You may only use this file in accordance with the terms of version
+# 1.0 of the CDDL.
+#
+# A full copy of the text of the CDDL should have accompanied this
+# source.  A copy of the CDDL is also available via the Internet at
+# http://www.illumos.org/license/CDDL.
+#
+
+#
+# Copyright (c) 2014 Joyent, Inc.  All rights reserved.
+#
+
+PROG= varpd
+OBJS = varpd.o
+SRCS = $(OBJS:%.o=../%.c)
+SVCMETHOD = svc-varpd
+MANIFEST = varpd.xml
+
+
+include ../Makefile.cmd
+include ../Makefile.ctf
+
+ROOTMANIFESTDIR=	$(ROOTSVCNETWORK)
+
+CLEANFILES += $(OBJS)
+CPPFLAGS += -D_REENTRANT
+CFLAGS += $(CCVERBOSE)
+LDLIBS += -lvarpd -lumem
+$(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
+
+# XXX Development only
+CFLAGS += -_gcc=-Wno-unused-function
+
+.KEEP_STATE:
+
+$(PROG): $(OBJS)
+	$(LINK.c) -o $@ $(OBJS) $(LDLIBS)
+	$(POST_PROCESS)
+
+clean:
+	-$(RM) $(CLEANFILES)
+
+lint: lint_PROG
+
+%.o: ../%.c
+	$(COMPILE.c) $<
+	$(POST_PROCESS_O)
+
+check: $(CHKMANIFEST)
+
+clobber: clean
+	$(RM) $(PROG)
+
+install: $(PROG) $(ROOTUSRSBINPROG) $(ROOTMANIFEST) $(ROOTSVCMETHOD)
+
+FRC:
+
+include ../Makefile.targ

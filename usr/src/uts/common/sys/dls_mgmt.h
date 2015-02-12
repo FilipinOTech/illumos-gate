@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, Joyent Inc. All rights reserved.
  */
 
 #ifndef	_DLS_MGMT_H
@@ -46,13 +47,15 @@ typedef enum {
 	DATALINK_CLASS_SIMNET		= 0x20,
 	DATALINK_CLASS_BRIDGE		= 0x40,
 	DATALINK_CLASS_IPTUN		= 0x80,
-	DATALINK_CLASS_PART		= 0x100
+	DATALINK_CLASS_PART		= 0x100,
+	DATALINK_CLASS_OVERLAY		= 0x200
 } datalink_class_t;
 
 #define	DATALINK_CLASS_ALL	(DATALINK_CLASS_PHYS |	\
 	DATALINK_CLASS_VLAN | DATALINK_CLASS_AGGR | DATALINK_CLASS_VNIC | \
 	DATALINK_CLASS_ETHERSTUB | DATALINK_CLASS_SIMNET | \
-	DATALINK_CLASS_BRIDGE | DATALINK_CLASS_IPTUN | DATALINK_CLASS_PART)
+	DATALINK_CLASS_BRIDGE | DATALINK_CLASS_IPTUN | DATALINK_CLASS_PART | \
+	DATALINK_CLASS_OVERLAY)
 
 /*
  * A combination of flags and media.
@@ -165,6 +168,7 @@ typedef struct dlmgmt_door_getname {
 typedef struct dlmgmt_door_getlinkid {
 	int			ld_cmd;
 	char			ld_link[MAXLINKNAMELEN];
+	zoneid_t		ld_zoneid;
 } dlmgmt_door_getlinkid_t;
 
 typedef struct dlmgmt_door_getnext_s {

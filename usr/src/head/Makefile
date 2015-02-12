@@ -154,6 +154,7 @@ HDRS=   $($(MACH)_HDRS)  $(ATTRDB_HDRS) \
 	regex.h		\
 	regexp.h	\
 	resolv.h	\
+	resolv_joy.h	\
 	rje.h		\
 	rtld_db.h	\
 	sac.h		\
@@ -215,6 +216,7 @@ HDRS=   $($(MACH)_HDRS)  $(ATTRDB_HDRS) \
 	xlocale.h	\
 	xti.h		\
 	xti_inet.h	\
+	zdoor.h		\
 	zone.h
 
 ISOHDRS = \

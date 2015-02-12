@@ -116,6 +116,7 @@ struct vdev_queue {
 	avl_tree_t	vq_read_offset_tree;
 	avl_tree_t	vq_write_offset_tree;
 	uint64_t	vq_last_offset;
+	zoneid_t	vq_last_zone_id;
 	hrtime_t	vq_io_complete_ts; /* time last i/o completed */
 	kmutex_t	vq_lock;
 };

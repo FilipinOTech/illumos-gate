@@ -26,7 +26,7 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 /*
- * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2013, 2015, Joyent, Inc. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -167,8 +167,8 @@ dtrace_safe_phdr(Phdr *phdrp, struct uarg *args, uintptr_t base)
  */
 int
 mapexec_brand(vnode_t *vp, uarg_t *args, Ehdr *ehdr, Addr *uphdr_vaddr,
-    intptr_t *voffset, caddr_t exec_file, int *interp, caddr_t *bssbase,
-    caddr_t *brkbase, size_t *brksize, uintptr_t *lddatap)
+    intptr_t *voffset, caddr_t exec_file, char **interpp, caddr_t *bssbase,
+    caddr_t *brkbase, size_t *brksize, uintptr_t *lddatap, uintptr_t *minaddrp)
 {
 	size_t		len;
 	struct vattr	vat;
@@ -180,12 +180,16 @@ mapexec_brand(vnode_t *vp, uarg_t *args, Ehdr *ehdr, Addr *uphdr_vaddr,
 	Phdr		*junk = NULL;
 	Phdr		*dynphdr = NULL;
 	Phdr		*dtrphdr = NULL;
+	char		*interp = NULL;
 	uintptr_t	lddata;
 	long		execsz;
 	intptr_t	minaddr;
 
 	if (lddatap != NULL)
 		*lddatap = NULL;
+
+	if (minaddrp != NULL)
+		*minaddrp = NULL;
 
 	if (error = execpermissions(vp, &vat, args)) {
 		uprintf("%s: Cannot execute %s\n", exec_file, args->pathname);
@@ -216,18 +220,53 @@ mapexec_brand(vnode_t *vp, uarg_t *args, Ehdr *ehdr, Addr *uphdr_vaddr,
 		return (error);
 	}
 
+	if (minaddrp != NULL)
+		*minaddrp = minaddr;
+
 	/*
-	 * Inform our caller if the executable needs an interpreter.
+	 * If the executable requires an interpreter, determine its name.
 	 */
-	*interp = (dynphdr == NULL) ? 0 : 1;
+	if (dynphdr != NULL) {
+		ssize_t	resid;
+
+		if (dynphdr->p_filesz > MAXPATHLEN || dynphdr->p_filesz == 0) {
+			uprintf("%s: Invalid interpreter\n", exec_file);
+			kmem_free(phdrbase, phdrsize);
+			return (ENOEXEC);
+		}
+
+		interp = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+
+		if ((error = vn_rdwr(UIO_READ, vp, interp, dynphdr->p_filesz,
+		    (offset_t)dynphdr->p_offset, UIO_SYSSPACE, 0,
+		    (rlim64_t)0, CRED(), &resid)) != 0 || resid != 0 ||
+		    interp[dynphdr->p_filesz - 1] != '\0') {
+			uprintf("%s: Cannot obtain interpreter pathname\n",
+			    exec_file);
+			kmem_free(interp, MAXPATHLEN);
+			kmem_free(phdrbase, phdrsize);
+			return (error != 0 ? error : ENOEXEC);
+		}
+	}
 
 	/*
 	 * If this is a statically linked executable, voffset should indicate
 	 * the address of the executable itself (it normally holds the address
 	 * of the interpreter).
 	 */
-	if (ehdr->e_type == ET_EXEC && *interp == 0)
+	if (ehdr->e_type == ET_EXEC && interp == NULL)
 		*voffset = minaddr;
+
+	/*
+	 * If the caller has asked for the interpreter name, return it (it's
+	 * up to the caller to free it); if the caller hasn't asked for it,
+	 * free it ourselves.
+	 */
+	if (interpp != NULL) {
+		*interpp = interp;
+	} else if (interp != NULL) {
+		kmem_free(interp, MAXPATHLEN);
+	}
 
 	if (uphdr != NULL) {
 		*uphdr_vaddr = uphdr->p_vaddr;
@@ -249,7 +288,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	caddr_t 	bssbase = 0;
 	caddr_t 	brkbase = 0;
 	size_t		brksize = 0;
-	ssize_t		dlnsize;
+	ssize_t		dlnsize, nsize = 0;
 	aux_entry_t	*aux;
 	int		error;
 	ssize_t		resid;
@@ -339,12 +378,38 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 #endif	/* _LP64 */
 
 	/*
-	 * We delay invoking the brand callback until we've figured out
-	 * what kind of elf binary we're trying to run, 32-bit or 64-bit.
-	 * We do this because now the brand library can just check
-	 * args->to_model to see if the target is 32-bit or 64-bit without
-	 * having do duplicate all the code above.
+	 * We delay invoking the brand callback until we've figured out what
+	 * kind of elf binary we're trying to run, 32-bit or 64-bit.  We do this
+	 * because now the brand library can just check args->to_model to see if
+	 * the target is 32-bit or 64-bit without having do duplicate all the
+	 * code above.
+	 *
+	 * We also give the brand a chance to indicate that based on the ELF
+	 * OSABI of the target binary it should become unbranded and optionally
+	 * indicate that it should be treated as existing in a specific prefix.
+	 *
+	 * Note that if a brand opts to go down this route it does not actually
+	 * end up being debranded. In other words, future programs that exec
+	 * will still be considered for branding unless this escape hatch is
+	 * used. Consider the case of lx brand for example. If a user runs
+	 * /native/usr/sbin/dtrace -c /bin/ls, the isaexec and normal executable
+	 * of DTrace that's in /native will take this escape hatch and be run
+	 * and interpreted using the normal system call table; however, the
+	 * execution of a non-illumos binary in the form of /bin/ls will still
+	 * be branded and be subject to all of the normal actions of the brand.
 	 */
+	if ((level < 2) &&
+	    (brand_action != EBA_NATIVE) && (PROC_IS_BRANDED(p))) {
+		if (BROP(p)->b_native_exec(ehdrp->e_ident[EI_OSABI],
+		    &args->brand_nroot) == B_TRUE) {
+			ASSERT(ehdrp->e_ident[EI_OSABI]);
+			brand_action = EBA_NATIVE;
+			/* Add one for the trailing '/' in the path */
+			if (args->brand_nroot != NULL)
+				nsize = strlen(args->brand_nroot) + 1;
+		}
+	}
+
 	if ((level < 2) &&
 	    (brand_action != EBA_NATIVE) && (PROC_IS_BRANDED(p))) {
 		error = BROP(p)->b_elfexec(vp, uap, args,
@@ -417,14 +482,15 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		 *	AT_BASE
 		 *	AT_FLAGS
 		 *	AT_PAGESZ
+		 *	AT_RANDOM	(added in stk_copyout)
 		 *	AT_SUN_AUXFLAGS
 		 *	AT_SUN_HWCAP
 		 *	AT_SUN_HWCAP2
-		 *	AT_SUN_PLATFORM (added in stk_copyout)
-		 *	AT_SUN_EXECNAME (added in stk_copyout)
+		 *	AT_SUN_PLATFORM	(added in stk_copyout)
+		 *	AT_SUN_EXECNAME	(added in stk_copyout)
 		 *	AT_NULL
 		 *
-		 * total == 9
+		 * total == 10
 		 */
 		if (hasdy && hasu) {
 			/*
@@ -439,7 +505,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 			 *
 			 * total = 5
 			 */
-			args->auxsize = (9 + 5) * sizeof (aux_entry_t);
+			args->auxsize = (10 + 5) * sizeof (aux_entry_t);
 		} else if (hasdy) {
 			/*
 			 * Has PT_INTERP but no PT_PHDR
@@ -449,9 +515,9 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 			 *
 			 * total = 2
 			 */
-			args->auxsize = (9 + 2) * sizeof (aux_entry_t);
+			args->auxsize = (10 + 2) * sizeof (aux_entry_t);
 		} else {
-			args->auxsize = 9 * sizeof (aux_entry_t);
+			args->auxsize = 10 * sizeof (aux_entry_t);
 		}
 	} else {
 		args->auxsize = 0;
@@ -464,13 +530,21 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	if (args->emulator != NULL)
 		args->auxsize += sizeof (aux_entry_t);
 
+	/*
+	 * If this is a native binary that's been given a modified interpreter
+	 * root, inform it that the native system exists at that root.
+	 */
+	if (args->brand_nroot != NULL) {
+		args->auxsize += sizeof (aux_entry_t);
+	}
+
 	if ((brand_action != EBA_NATIVE) && (PROC_IS_BRANDED(p))) {
 		branded = 1;
 		/*
-		 * We will be adding 4 entries to the aux vectors.  One for
-		 * the the brandname and 3 for the brand specific aux vectors.
+		 * We will be adding 5 entries to the aux vectors.  One for
+		 * the the brandname and 4 for the brand specific aux vectors.
 		 */
-		args->auxsize += 4 * sizeof (aux_entry_t);
+		args->auxsize += 5 * sizeof (aux_entry_t);
 	}
 
 	/* Hardware/Software capabilities */
@@ -501,7 +575,8 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	aux = bigwad->elfargs;
 	/*
 	 * Move args to the user's stack.
-	 * This can fill in the AT_SUN_PLATFORM and AT_SUN_EXECNAME aux entries.
+	 * This can fill in the AT_SUN_PLATFORM, AT_SUN_EXECNAME and AT_RANDOM
+	 * aux entries.
 	 */
 	if ((error = exec_args(uap, args, idatap, (void **)&aux)) != 0) {
 		if (error == -1) {
@@ -542,17 +617,22 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		char		*p;
 		struct vnode	*nvp;
 
-		dlnsize = dyphdr->p_filesz;
+		dlnsize = dyphdr->p_filesz + nsize;
 
 		if (dlnsize > MAXPATHLEN || dlnsize <= 0)
 			goto bad;
 
+		if (nsize != 0) {
+			bcopy(args->brand_nroot, dlnp, nsize - 1);
+			dlnp[nsize - 1] = '/';
+		}
+
 		/*
 		 * Read in "interpreter" pathname.
 		 */
-		if ((error = vn_rdwr(UIO_READ, vp, dlnp, dyphdr->p_filesz,
-		    (offset_t)dyphdr->p_offset, UIO_SYSSPACE, 0, (rlim64_t)0,
-		    CRED(), &resid)) != 0) {
+		if ((error = vn_rdwr(UIO_READ, vp, dlnp + nsize,
+		    dyphdr->p_filesz, (offset_t)dyphdr->p_offset, UIO_SYSSPACE,
+		    0, (rlim64_t)0, CRED(), &resid)) != 0) {
 			uprintf("%s: Cannot obtain interpreter pathname\n",
 			    exec_file);
 			goto bad;
@@ -718,8 +798,8 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	if (hasauxv) {
 		int auxf = AF_SUN_HWCAPVERIFY;
 		/*
-		 * Note: AT_SUN_PLATFORM and AT_SUN_EXECNAME were filled in via
-		 * exec_args()
+		 * Note: AT_SUN_PLATFORM, AT_SUN_EXECNAME and AT_RANDOM were
+		 * filled in via exec_args()
 		 */
 		ADDAUX(aux, AT_BASE, voffset)
 		ADDAUX(aux, AT_FLAGS, at_flags)
@@ -789,6 +869,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 			ADDAUX(aux, AT_SUN_BRAND_AUX1, 0)
 			ADDAUX(aux, AT_SUN_BRAND_AUX2, 0)
 			ADDAUX(aux, AT_SUN_BRAND_AUX3, 0)
+			ADDAUX(aux, AT_SUN_BRAND_AUX4, 0)
 		}
 
 		ADDAUX(aux, AT_NULL, 0)
@@ -1182,7 +1263,7 @@ mapelfexec(
 	size_t *brksize)
 {
 	Phdr *phdr;
-	int i, prot, error;
+	int i, prot, error, lastprot = 0;
 	caddr_t addr = NULL;
 	size_t zfodsz;
 	int ptload = 0;
@@ -1190,6 +1271,7 @@ mapelfexec(
 	off_t offset;
 	int hsize = ehdr->e_phentsize;
 	caddr_t mintmp = (caddr_t)-1;
+	uintptr_t lastaddr = NULL;
 	extern int use_brk_lpg;
 
 	if (ehdr->e_type == ET_DYN) {
@@ -1220,6 +1302,7 @@ mapelfexec(
 	} else {
 		*voffset = 0;
 	}
+
 	phdr = (Phdr *)phdrbase;
 	for (i = nphdrs; i > 0; i--) {
 		switch (phdr->p_type) {
@@ -1244,6 +1327,41 @@ mapelfexec(
 			 */
 			if (addr < mintmp)
 				mintmp = addr;
+
+			/*
+			 * Segments need not correspond to page boundaries:
+			 * they are permitted to share a page.  If two PT_LOAD
+			 * segments share the same page, and the permissions
+			 * of the segments differ, the behavior is historically
+			 * that the permissions of the latter segment are used
+			 * for the page that the two segments share.  This is
+			 * also historically a non-issue:  binaries generated
+			 * by most anything will make sure that two PT_LOAD
+			 * segments with differing permissions don't actually
+			 * share any pages.  However, there exist some crazy
+			 * things out there (including at least an obscure
+			 * Portuguese teaching language called G-Portugol) that
+			 * actually do the wrong thing and expect it to work:
+			 * they have a segment with execute permission share
+			 * a page with a subsequent segment that does not
+			 * have execute permissions and expect the resulting
+			 * shared page to in fact be executable.  To accommodate
+			 * such broken link editors, we take advantage of a
+			 * latitude explicitly granted to the loader:  it is
+			 * permitted to make _any_ PT_LOAD segment executable
+			 * (provided that it is readable or writable).  If we
+			 * see that we're sharing a page and that the previous
+			 * page was executable, we will add execute permissions
+			 * to our segment.
+			 */
+			if (btop(lastaddr) == btop((uintptr_t)addr) &&
+			    (phdr->p_flags & (PF_R | PF_W)) &&
+			    (lastprot & PROT_EXEC)) {
+				prot |= PROT_EXEC;
+			}
+
+			lastaddr = (uintptr_t)addr + phdr->p_filesz;
+			lastprot = prot;
 
 			zfodsz = (size_t)phdr->p_memsz - phdr->p_filesz;
 

@@ -21,6 +21,7 @@
 
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright (c) 2013 Andrew Stormont.  All rights reserved.
+# Copyright (c) 2014, Joyent, Inc. All rights reserved.
 
 
 #
@@ -216,7 +217,7 @@ DRV_KMODS	+= log logindmux kssl mm nca physmem pm poll pool
 DRV_KMODS	+= pseudo ptc ptm pts ptsl ramdisk random rsm rts sad
 DRV_KMODS	+= simnet softmac sppp sppptun sy sysevent sysmsg 
 DRV_KMODS	+= spdsock
-DRV_KMODS	+= tcp tcp6 tl tnf ttymux udp udp6 wc winlock zcons
+DRV_KMODS	+= tcp tcp6 tl tnf ttymux udp udp6 wc winlock zcons zfd
 DRV_KMODS	+= ippctl
 DRV_KMODS	+= dld
 DRV_KMODS	+= ipd
@@ -236,6 +237,8 @@ DRV_KMODS	+= nulldriver
 DRV_KMODS	+= bridge trill
 DRV_KMODS	+= bpf
 DRV_KMODS	+= dca
+DRV_KMODS	+= inotify
+DRV_KMODS	+= eventfd
 
 #
 #       Hardware Drivers in common space

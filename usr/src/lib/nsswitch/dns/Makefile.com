@@ -44,5 +44,5 @@ CPPFLAGS +=	-DNSS_DNS_LIBRESOLV=\"libresolv.so.2\"
 
 LINTFLAGS +=	-erroff=E_GLOBAL_COULD_BE_STATIC2
 
-LDLIBS +=	-lnsl -lsocket
+LDLIBS +=	-lnsl -lresolv_joy -lsocket
 DYNLIB1 =	nss_dns.so$(VERS)

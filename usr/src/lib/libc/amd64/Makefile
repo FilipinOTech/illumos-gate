@@ -855,13 +855,16 @@ PORTSYS=			\
 	chmod.o			\
 	chown.o			\
 	corectl.o		\
+	epoll.o			\
 	exacctsys.o		\
 	execl.o			\
 	execle.o		\
 	execv.o			\
+	eventfd.o		\
 	fcntl.o			\
 	getpagesizes.o		\
 	getpeerucred.o		\
+	inotify.o		\
 	inst_sync.o		\
 	issetugid.o		\
 	label.o			\

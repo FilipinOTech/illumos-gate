@@ -237,3 +237,8 @@ export SPRO_VROOT="$SPRO_ROOT"
 #export PERL_VERSION=5.16.1
 #export PERL_ARCH=i86pc-solaris-thread-multi-64int
 #export PERL_PKGVERS=-5161
+#
+# These checks ensure that if we accidentally run a program linked against the
+# proto area, that we then fail the build.
+#
+export LD_TOXIC_PATH="$ROOT/lib:$ROOT/usr/lib"

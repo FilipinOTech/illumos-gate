@@ -42,6 +42,7 @@
 #include <sys/zfs_znode.h>
 #include <sys/spa_impl.h>
 #include <sys/dsl_deadlist.h>
+#include <sys/zfs_zone.h>
 #include <sys/bptree.h>
 #include <sys/zfeature.h>
 #include <sys/zil_impl.h>

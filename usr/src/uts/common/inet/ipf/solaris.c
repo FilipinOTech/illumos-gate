@@ -625,7 +625,6 @@ ipf_stack_shutdown(const netid_t id, void *arg)
 /*
  * Destroy things for ipf for one stack.
  */
-/* ARGSUSED */
 static void
 ipf_stack_destroy_one(const netid_t id, ipf_stack_t *ifs)
 {

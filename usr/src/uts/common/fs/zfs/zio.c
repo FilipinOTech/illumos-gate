@@ -22,6 +22,7 @@
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2011 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  */
 
 #include <sys/sysmacros.h>
@@ -39,6 +40,7 @@
 #include <sys/ddt.h>
 #include <sys/blkptr.h>
 #include <sys/zfeature.h>
+#include <sys/zfs_zone.h>
 
 /*
  * ==========================================================================
@@ -557,11 +559,14 @@ zio_create(zio_t *pio, spa_t *spa, uint64_t txg, const blkptr_t *bp,
 		zio->io_bookmark = *zb;
 
 	if (pio != NULL) {
+		zio->io_zoneid = pio->io_zoneid;
 		if (zio->io_logical == NULL)
 			zio->io_logical = pio->io_logical;
 		if (zio->io_child_type == ZIO_CHILD_GANG)
 			zio->io_gang_leader = pio->io_gang_leader;
 		zio_add_child(pio, zio);
+	} else {
+		zfs_zone_zio_init(zio);
 	}
 
 	return (zio);

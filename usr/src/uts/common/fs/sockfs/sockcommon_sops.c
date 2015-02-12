@@ -586,11 +586,6 @@ so_sendmblk(struct sonode *so, struct nmsghdr *msg, int fflag,
 
 	SO_BLOCK_FALLBACK(so, SOP_SENDMBLK(so, msg, fflag, cr, mpp));
 
-	if ((so->so_mode & SM_SENDFILESUPP) == 0) {
-		SO_UNBLOCK_FALLBACK(so);
-		return (EOPNOTSUPP);
-	}
-
 	error = so_sendmblk_impl(so, msg, fflag, cr, mpp, so->so_filter_top,
 	    B_FALSE);
 
@@ -953,6 +948,13 @@ so_poll(struct sonode *so, short events, int anyyet, short *reventsp,
 	if (!list_is_empty(&so->so_acceptq_list))
 		*reventsp |= (POLLIN|POLLRDNORM) & events;
 
+	/*
+	 * If we're looking for POLLRDHUP, indicate it if we have sent the
+	 * last rx signal for the socket.
+	 */
+	if ((events & POLLRDHUP) && (state & SS_SENTLASTREADSIG))
+		*reventsp |= POLLRDHUP;
+
 	/* Data */
 	/* so_downcalls is null for sctp */
 	if (so->so_downcalls != NULL && so->so_downcalls->sd_poll != NULL) {
@@ -988,14 +990,18 @@ so_poll(struct sonode *so, short events, int anyyet, short *reventsp,
 			*reventsp |= POLLHUP;
 	}
 
-	if (!*reventsp && !anyyet) {
+	if ((!*reventsp && !anyyet) || (events & POLLET)) {
 		/* Check for read events again, but this time under lock */
 		if (events & (POLLIN|POLLRDNORM)) {
 			mutex_enter(&so->so_lock);
 			if (SO_HAVE_DATA(so) ||
 			    !list_is_empty(&so->so_acceptq_list)) {
+				if (events & POLLET)
+					so->so_pollev |= SO_POLLEV_IN;
+
 				mutex_exit(&so->so_lock);
 				*reventsp |= (POLLIN|POLLRDNORM) & events;
+
 				return (0);
 			} else {
 				so->so_pollev |= SO_POLLEV_IN;
@@ -1316,6 +1322,26 @@ so_queue_msg_impl(struct sonode *so, mblk_t *mp,
 		}
 	}
 
+	mutex_enter(&so->so_lock);
+	if (so->so_krecv_cb != NULL) {
+		boolean_t cont;
+		so_krecv_f func = so->so_krecv_cb;
+		void *arg = so->so_krecv_arg;
+
+		mutex_exit(&so->so_lock);
+		cont = so->so_krecv_cb(so, mp, msg_size, flags & MSG_OOB, arg);
+		mutex_enter(&so->so_lock);
+		if (cont == B_TRUE) {
+			space_left = so->so_rcvbuf;
+		} else {
+			so->so_rcv_queued = so->so_rcvlowat;
+			*errorp = ENOSPC;
+			space_left = -1;
+		}
+		goto done_unlock;
+	}
+	mutex_exit(&so->so_lock);
+
 	if (flags & MSG_OOB) {
 		so_queue_oob(so, mp, msg_size);
 		mutex_enter(&so->so_lock);
@@ -1593,6 +1619,13 @@ so_recvmsg(struct sonode *so, struct nmsghdr *msg, struct uio *uiop,
 		SO_UNBLOCK_FALLBACK(so);
 		return (ENOTCONN);
 	}
+
+	mutex_enter(&so->so_lock);
+	if (so->so_krecv_cb != NULL) {
+		mutex_exit(&so->so_lock);
+		return (EOPNOTSUPP);
+	}
+	mutex_exit(&so->so_lock);
 
 	if (msg->msg_flags & MSG_PEEK)
 		msg->msg_flags &= ~MSG_WAITALL;

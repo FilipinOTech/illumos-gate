@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, Joyent, Inc. All rights reserved.
  */
 
 #ifndef _LIBDLADM_H
@@ -71,6 +72,10 @@ extern "C" {
  *  - DLADM_OPT_BOOT:
  *    Bypass check functions during boot (used by pool property since pools
  *    can come up after link properties are set)
+ *
+ *  - DLADM_OPT_TRANSIENT:
+ *    Indicates that the link assigned to a zone is transient and will be
+ *    removed when the zone shuts down.
  */
 #define	DLADM_OPT_ACTIVE	0x00000001
 #define	DLADM_OPT_PERSIST	0x00000002
@@ -81,6 +86,7 @@ extern "C" {
 #define	DLADM_OPT_VLAN		0x00000040
 #define	DLADM_OPT_NOREFRESH	0x00000080
 #define	DLADM_OPT_BOOT		0x00000100
+#define	DLADM_OPT_TRANSIENT	0x00000200
 
 #define	DLADM_WALK_TERMINATE	0
 #define	DLADM_WALK_CONTINUE	-1
@@ -173,7 +179,8 @@ typedef enum {
 	DLADM_STATUS_NO_IB_HW_RESOURCE,
 	DLADM_STATUS_INVALID_PKEY_TBL_SIZE,
 	DLADM_STATUS_PORT_NOPROTO,
-	DLADM_STATUS_INVALID_MTU
+	DLADM_STATUS_INVALID_MTU,
+	DLADM_STATUS_BAD_ENCAP
 } dladm_status_t;
 
 typedef enum {
@@ -282,9 +289,9 @@ extern dladm_status_t	dladm_zone_halt(dladm_handle_t, zoneid_t);
 
 extern dladm_status_t	dladm_strs2range(char **, uint_t, mac_propval_type_t,
 			    mac_propval_range_t **);
-extern dladm_status_t	dladm_range2list(mac_propval_range_t *, void*,
+extern dladm_status_t	dladm_range2list(const mac_propval_range_t *, void *,
 			    uint_t *);
-extern int		dladm_range2strs(mac_propval_range_t *, char **);
+extern int		dladm_range2strs(const mac_propval_range_t *, char **);
 extern dladm_status_t	dladm_list2range(void *, uint_t, mac_propval_type_t,
 			    mac_propval_range_t **);
 

@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, Joyent, Inc. All rights reserved.
+ * Copyright 2015 Joyent, Inc. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -345,6 +345,8 @@ proc_exit(int why, int what)
 	refstr_t *cwd;
 	hrtime_t hrutime, hrstime;
 	int evaporate;
+	brand_t *orig_brand = NULL;
+	void *brand_data = NULL;
 
 	/*
 	 * Stop and discard the process's lwps except for the current one,
@@ -370,14 +372,22 @@ proc_exit(int why, int what)
 	DTRACE_PROC1(exit, int, why);
 
 	/*
-	 * Will perform any brand specific proc exit processing, since this
-	 * is always the last lwp, will also perform lwp_exit and free brand
-	 * data
+	 * Will perform any brand specific proc exit processing. Since this
+	 * is always the last lwp, will also perform lwp_exit and free
+	 * brand_data, except in the case that the brand has a b_exit_with_sig
+	 * handler. In this case we free the brand_data later within this
+	 * function.
 	 */
+	mutex_enter(&p->p_lock);
 	if (PROC_IS_BRANDED(p)) {
+		orig_brand = p->p_brand;
+		if (p->p_brand_data != NULL && orig_brand->b_data_size > 0) {
+			brand_data = p->p_brand_data;
+		}
 		lwp_detach_brand_hdlrs(lwp);
 		brand_clearbrand(p, B_FALSE);
 	}
+	mutex_exit(&p->p_lock);
 
 	/*
 	 * Don't let init exit unless zone_start_init() failed its exec, or
@@ -393,10 +403,11 @@ proc_exit(int why, int what)
 			if (z->zone_restart_init == B_TRUE) {
 				if (restart_init(what, why) == 0)
 					return (0);
-			} else {
-				(void) zone_kadmin(A_SHUTDOWN, AD_HALT, NULL,
-				    CRED());
 			}
+
+			z->zone_init_status = wstat(why, what);
+			(void) zone_kadmin(A_SHUTDOWN, AD_HALT, NULL,
+			    zone_kcred());
 		}
 
 		/*
@@ -650,10 +661,22 @@ proc_exit(int why, int what)
 	if ((q = p->p_child) != NULL && p != proc_init) {
 		struct proc	*np;
 		struct proc	*initp = proc_init;
+		pid_t		zone_initpid = 1;
+		struct proc	*zoneinitp = NULL;
 		boolean_t	setzonetop = B_FALSE;
 
-		if (!INGLOBALZONE(curproc))
-			setzonetop = B_TRUE;
+		if (!INGLOBALZONE(curproc)) {
+			zone_initpid = curproc->p_zone->zone_proc_initpid;
+
+			ASSERT(MUTEX_HELD(&pidlock));
+			zoneinitp = prfind(zone_initpid);
+			if (zoneinitp != NULL) {
+				initp = zoneinitp;
+			} else {
+				zone_initpid = 1;
+				setzonetop = B_TRUE;
+			}
+		}
 
 		pgdetach(p);
 
@@ -665,7 +688,8 @@ proc_exit(int why, int what)
 			 */
 			delete_ns(q->p_parent, q);
 
-			q->p_ppid = 1;
+			q->p_ppid = zone_initpid;
+
 			q->p_pidflag &= ~(CLDNOSIGCHLD | CLDWAITPID);
 			if (setzonetop) {
 				mutex_enter(&q->p_lock);
@@ -839,8 +863,60 @@ proc_exit(int why, int what)
 
 	mutex_exit(&p->p_lock);
 	if (!evaporate) {
-		p->p_pidflag &= ~CLDPEND;
-		sigcld(p, sqp);
+		/*
+		 * The brand specific code only happens when the brand has a
+		 * function to call in place of sigcld, the data itself still
+		 * existed, and the parent of the exiting process is not the
+		 * global zone init. If the parent is the global zone init,
+		 * then the process was reparented, and we don't want brand
+		 * code delivering possibly strange signals to init. Also, init
+		 * is not branded, so any brand specific exit data will not be
+		 * picked up by init anyway.
+		 * It is assumed by this code that any brand where
+		 * b_exit_with_sig == NULL, will free its own brand_data rather
+		 * than letting this piece of code free it.
+		 */
+		if (orig_brand != NULL &&
+		    orig_brand->b_ops->b_exit_with_sig != NULL &&
+		    brand_data != NULL && p->p_ppid != 1) {
+			/*
+			 * The code for _fini that could unload the brand_t
+			 * blocks until the count of zones using the module
+			 * reaches zero. Zones decrement the refcount on their
+			 * brands only after all user tasks in that zone have
+			 * exited and been waited on. The decrement on the
+			 * brand's refcount happen in zone_destroy(). That
+			 * depends on zone_shutdown() having been completed.
+			 * zone_shutdown() includes a call to zone_empty(),
+			 * where the zone waits for itself to reach the state
+			 * ZONE_IS_EMPTY. This state is only set in either
+			 * zone_shutdown(), when there are no user processes as
+			 * the zone enters this function, or in
+			 * zone_task_rele(). zone_task_rele() is called from
+			 * code triggered by waiting on processes, not by the
+			 * processes exiting through proc_exit().  This means
+			 * all the branded processes that could exist for a
+			 * specific brand_t must exit and get reaped before the
+			 * refcount on the brand_t can reach 0. _fini will
+			 * never unload the corresponding brand module before
+			 * proc_exit finishes execution for all processes
+			 * branded with a particular brand_t, which makes the
+			 * operation below safe to do. Brands that wish to use
+			 * this mechanism must wait in _fini as described
+			 * above.
+			 */
+			orig_brand->b_ops->b_exit_with_sig(p,
+			    sqp, brand_data);
+		} else {
+			p->p_pidflag &= ~CLDPEND;
+			sigcld(p, sqp);
+		}
+		if (brand_data != NULL) {
+			kmem_free(brand_data, orig_brand->b_data_size);
+			brand_data = NULL;
+			orig_brand = NULL;
+		}
+
 	} else {
 		/*
 		 * Do what sigcld() would do if the disposition
@@ -950,7 +1026,8 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 	pp = ttoproc(curthread);
 
 	/*
-	 * lock parent mutex so that sibling chain can be searched.
+	 * Anytime you are looking for a process, you take pidlock to prevent
+	 * things from changing as you look.
 	 */
 	mutex_enter(&pidlock);
 
@@ -981,6 +1058,11 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 				continue;
 			if (idtype == P_PGID && id != cp->p_pgrp)
 				continue;
+			if (PROC_IS_BRANDED(pp)) {
+				if (BROP(pp)->b_wait_filter != NULL &&
+				    BROP(pp)->b_wait_filter(pp, cp) == B_FALSE)
+					continue;
+			}
 
 			switch (cp->p_wcode) {
 
@@ -1031,6 +1113,11 @@ waitid(idtype_t idtype, id_t id, k_siginfo_t *ip, int options)
 				continue;
 			if (idtype == P_PGID && id != cp->p_pgrp)
 				continue;
+			if (PROC_IS_BRANDED(pp)) {
+				if (BROP(pp)->b_wait_filter != NULL &&
+				    BROP(pp)->b_wait_filter(pp, cp) == B_FALSE)
+					continue;
+			}
 
 			switch (cp->p_wcode) {
 			case CLD_TRAPPED:

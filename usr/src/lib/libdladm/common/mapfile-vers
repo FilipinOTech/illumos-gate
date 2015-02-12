@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2014, Joyent Inc. All rights reserved.
 #
 
 #
@@ -134,6 +135,7 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	dladm_remap_datalink_id;
 	dladm_up_datalink_id;
 	dladm_name2info;
+	dladm_zname2info;
 	dladm_datalink_id2info;
 	dladm_walk_datalink_id;
 	dladm_create_conf;
@@ -270,6 +272,19 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	dladm_strs2range;
 	dladm_range2list;
 	dladm_list2range;
+
+	dladm_overlay_create;
+	dladm_overlay_delete;
+	dladm_overlay_status;
+	dladm_overlay_prop_info;
+	dladm_overlay_get_prop;
+	dladm_overlay_walk_prop;
+
+	dladm_overlay_cache_set;
+	dladm_overlay_cache_get;
+	dladm_overlay_cache_delete;
+	dladm_overlay_cache_flush;
+	dladm_overlay_walk_cache;
     local:
 	*;
 };

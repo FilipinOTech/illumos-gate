@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, Joyent, Inc. All rights reserved.
  */
 
 #include <sys/errno.h>
@@ -51,7 +52,7 @@ void	s10_setbrand(proc_t *);
 int	s10_getattr(zone_t *, int, void *, size_t *);
 int	s10_setattr(zone_t *, int, void *, size_t);
 int	s10_brandsys(int, int64_t *, uintptr_t, uintptr_t, uintptr_t,
-		uintptr_t, uintptr_t, uintptr_t);
+		uintptr_t, uintptr_t);
 void	s10_copy_procdata(proc_t *, proc_t *);
 void	s10_proc_exit(struct proc *, klwp_t *);
 void	s10_exec();
@@ -83,7 +84,12 @@ struct brand_ops s10_brops = {
 	s10_elfexec,
 	s10_sigset_native_to_s10,
 	s10_sigset_s10_to_native,
+	NULL,
 	S10_NSIG,
+	NULL,
+	NULL,
+	NULL,
+	NULL
 };
 
 #ifdef	sparc
@@ -99,9 +105,12 @@ struct brand_mach_ops s10_mops = {
 
 struct brand_mach_ops s10_mops = {
 	s10_brand_sysenter_callback,
+	NULL,
 	s10_brand_int91_callback,
 	s10_brand_syscall_callback,
-	s10_brand_syscall32_callback
+	s10_brand_syscall32_callback,
+	NULL,
+	NULL
 };
 
 #else	/* ! __amd64 */
@@ -109,7 +118,10 @@ struct brand_mach_ops s10_mops = {
 struct brand_mach_ops s10_mops = {
 	s10_brand_sysenter_callback,
 	NULL,
+	NULL,
 	s10_brand_syscall_callback,
+	NULL,
+	NULL,
 	NULL
 };
 #endif	/* __amd64 */
@@ -120,7 +132,8 @@ struct brand	s10_brand = {
 	BRAND_VER_1,
 	"solaris10",
 	&s10_brops,
-	&s10_mops
+	&s10_mops,
+	sizeof (brand_proc_data_t),
 };
 
 static struct modlbrand modlbrand = {
@@ -252,7 +265,7 @@ s10_native(void *cmd, void *args)
 /*ARGSUSED*/
 int
 s10_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
-    uintptr_t arg3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6)
+    uintptr_t arg3, uintptr_t arg4, uintptr_t arg5)
 {
 	proc_t	*p = curproc;
 	int	res;
@@ -394,7 +407,7 @@ s10_elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 {
 	return (brand_solaris_elfexec(vp, uap, args, idatap, level, execsz,
 	    setid, exec_file, cred, brand_action, &s10_brand, S10_BRANDNAME,
-	    S10_LIB, S10_LIB32, S10_LINKER, S10_LINKER32));
+	    S10_LIB, S10_LIB32));
 }
 
 void

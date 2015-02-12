@@ -121,6 +121,10 @@ extern int 	ksocket_close(ksocket_t, struct cred *);
 extern void	ksocket_hold(ksocket_t);
 extern void	ksocket_rele(ksocket_t);
 
+typedef boolean_t (*ksocket_krecv_f)(ksocket_t, mblk_t *, size_t, int, void *);
+extern int	ksocket_krecv_set(ksocket_t, ksocket_krecv_f, void *);
+extern void	ksocket_krecv_unblock(ksocket_t);
+
 #ifdef	__cplusplus
 }
 #endif

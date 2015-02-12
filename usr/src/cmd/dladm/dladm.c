@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015 Joyent, Inc. All rights reserved.
  */
 
 #include <stdio.h>
@@ -59,6 +60,7 @@
 #include <libdliptun.h>
 #include <libdlsim.h>
 #include <libdlbridge.h>
+#include <libdloverlay.h>
 #include <libinetutil.h>
 #include <libvrrpadm.h>
 #include <bsm/adt.h>
@@ -74,6 +76,7 @@
 #include <stddef.h>
 #include <stp_in.h>
 #include <ofmt.h>
+#include <libcmdutils.h>
 
 #define	MAXPORT			256
 #define	MAXVNIC			256
@@ -154,6 +157,7 @@ typedef struct show_vnic_state {
 	dladm_status_t	vs_status;
 	uint32_t	vs_flags;
 	ofmt_handle_t	vs_ofmt;
+	char		*vs_zonename;
 } show_vnic_state_t;
 
 typedef struct show_part_state {
@@ -192,6 +196,7 @@ static ofmt_cb_t print_lacp_cb, print_phys_one_mac_cb;
 static ofmt_cb_t print_xaggr_cb, print_aggr_stats_cb;
 static ofmt_cb_t print_phys_one_hwgrp_cb, print_wlan_attr_cb;
 static ofmt_cb_t print_wifi_status_cb, print_link_attr_cb;
+static ofmt_cb_t print_overlay_cb, print_overlay_fma_cb, print_overlay_targ_cb;
 static void dladm_ofmt_check(ofmt_status_t, boolean_t, ofmt_handle_t);
 
 typedef void cmdfunc_t(int, char **, const char *);
@@ -219,6 +224,8 @@ static cmdfunc_t do_create_bridge, do_modify_bridge, do_delete_bridge;
 static cmdfunc_t do_add_bridge, do_remove_bridge, do_show_bridge;
 static cmdfunc_t do_create_iptun, do_modify_iptun, do_delete_iptun;
 static cmdfunc_t do_show_iptun, do_up_iptun, do_down_iptun;
+static cmdfunc_t do_create_overlay, do_delete_overlay, do_modify_overlay;
+static cmdfunc_t do_show_overlay;
 
 static void 	do_up_vnic_common(int, char **, const char *, boolean_t);
 
@@ -265,7 +272,7 @@ typedef struct	cmd {
 
 static cmd_t	cmds[] = {
 	{ "rename-link",	do_rename_link,
-	    "    rename-link      <oldlink> <newlink>"			},
+	    "    rename-link      [-z zonename] <oldlink> <newlink>"	},
 	{ "show-link",		do_show_link,
 	    "    show-link        [-pP] [-o <field>,..] [-s [-i <interval>]] "
 	    "[<link>]\n"						},
@@ -300,12 +307,13 @@ static cmd_t	cmds[] = {
 	{ "show-wifi",		do_show_wifi,
 	    "    show-wifi        [-p] [-o <field>,...] [<link>]\n"	},
 	{ "set-linkprop",	do_set_linkprop,
-	    "    set-linkprop     [-t] -p <prop>=<value>[,...] <name>"	},
+	    "    set-linkprop     [-t] [-z zonename] -p <prop>=<value>[,...] "
+	    "<name>"							},
 	{ "reset-linkprop",	do_reset_linkprop,
-	    "    reset-linkprop   [-t] [-p <prop>,...] <name>"		},
+	    "    reset-linkprop   [-t] [-z zonename] [-p <prop>,...] <name>"},
 	{ "show-linkprop",	do_show_linkprop,
-	    "    show-linkprop    [-cP] [-o <field>,...] [-p <prop>,...] "
-	    "<name>\n"							},
+	    "    show-linkprop    [-cP] [-o <field>,...] [-z zonename] "
+	    "[-p <prop>,...] <name>\n"					},
 	{ "show-ether",		do_show_ether,
 	    "    show-ether       [-px][-o <field>,...] <link>\n"	},
 	{ "create-secobj",	do_create_secobj,
@@ -347,10 +355,10 @@ static cmd_t	cmds[] = {
 	    "\t\t     {vrrp -V <vrid> -A {inet | inet6}} [-v <vid> [-f]]\n"
 	    "\t\t     [-p <prop>=<value>[,...]] <vnic-link>"	},
 	{ "delete-vnic",	do_delete_vnic,
-	    "    delete-vnic      [-t] <vnic-link>"			},
+	    "    delete-vnic      [-t] [-z zonename] <vnic-link>"	},
 	{ "show-vnic",		do_show_vnic,
-	    "    show-vnic        [-pP] [-l <link>] [-s [-i <interval>]] "
-	    "[<link>]\n"						},
+	    "    show-vnic        [-pP] [-l <link>] [-z zonename] "
+	    "[-s [-i <interval>]] [<link>]\n"				},
 	{ "up-vnic",		do_up_vnic,		NULL		},
 	{ "create-part",	do_create_part,
 	    "    create-part      [-t] [-f] -l <link> [-P <pkey>]\n"
@@ -401,6 +409,16 @@ static cmd_t	cmds[] = {
 	    " <bridge>\n"
 	    "    show-bridge      -t [-p] [-o <field>,...] [-s [-i <interval>]]"
 	    " <bridge>\n"						},
+	{ "create-overlay",	do_create_overlay,
+	    "    create-overlay   -e <encap> -v <vnetid>\n"
+	    "\t\t     [ -p <prop>=<value>[,...]] <overlay-name>"	},
+	{ "delete-overlay",	do_delete_overlay,
+	    "    delete-overlay   <overlay-name>"			},
+	{ "modify-overlay",	do_modify_overlay,
+	    "    modify-overlay   [-d mac] [-f] [-s mac=ip:port] "
+	    "<overlay-name>"						},
+	{ "show-overlay",	do_show_overlay,
+	    "    show-overlay     [-t] <overlay> \n"			},
 	{ "show-usage",		do_show_usage,
 	    "    show-usage       [-a] [-d | -F <format>] "
 	    "[-s <DD/MM/YYYY,HH:MM:SS>]\n"
@@ -959,6 +977,7 @@ typedef struct show_linkprop_state {
 	char			ls_link[MAXLINKNAMELEN];
 	char			*ls_line;
 	char			**ls_propvals;
+	char			*ls_zonename;
 	dladm_arg_list_t	*ls_proplist;
 	boolean_t		ls_parsable;
 	boolean_t		ls_persist;
@@ -1011,21 +1030,24 @@ typedef struct vnic_fields_buf_s
 	char vnic_macaddr[18];
 	char vnic_macaddrtype[19];
 	char vnic_vid[6];
+	char vnic_zone[ZONENAME_MAX];
 } vnic_fields_buf_t;
 
 static const ofmt_field_t vnic_fields[] = {
 { "LINK",		13,
 	offsetof(vnic_fields_buf_t, vnic_link),	print_default_cb},
-{ "OVER",		13,
+{ "OVER",		11,
 	offsetof(vnic_fields_buf_t, vnic_over),	print_default_cb},
-{ "SPEED",		7,
+{ "SPEED",		6,
 	offsetof(vnic_fields_buf_t, vnic_speed), print_default_cb},
 { "MACADDRESS",		18,
 	offsetof(vnic_fields_buf_t, vnic_macaddr), print_default_cb},
-{ "MACADDRTYPE",	20,
+{ "MACADDRTYPE",	12,
 	offsetof(vnic_fields_buf_t, vnic_macaddrtype), print_default_cb},
-{ "VID",		7,
+{ "VID",		5,
 	offsetof(vnic_fields_buf_t, vnic_vid), print_default_cb},
+{ "ZONE",		20,
+	offsetof(vnic_fields_buf_t, vnic_zone), print_default_cb},
 { NULL,			0, 0, NULL}}
 ;
 
@@ -1424,6 +1446,57 @@ static ofmt_field_t bridge_trill_fields[] = {
 { "NEXTHOP",	17,
     offsetof(bridge_trill_fields_buf_t, bridget_nexthop), print_default_cb },
 { NULL,		0, 0, NULL}};
+
+/*
+ * Structures for dladm show-overlay
+ */
+typedef enum {
+	OVERLAY_LINK,
+	OVERLAY_PROPERTY,
+	OVERLAY_PERM,
+	OVERLAY_REQ,
+	OVERLAY_VALUE,
+	OVERLAY_DEFAULT,
+	OVERLAY_POSSIBLE
+} overlay_field_index_t;
+
+static const ofmt_field_t overlay_fields[] = {
+/* name,	field width,  index */
+{ "LINK",	13,	OVERLAY_LINK,		print_overlay_cb },
+{ "PROPERTY",	20,	OVERLAY_PROPERTY,	print_overlay_cb },
+{ "PERM",	5,	OVERLAY_PERM,		print_overlay_cb },
+{ "REQ",	4,	OVERLAY_REQ,		print_overlay_cb },
+{ "VALUE",	12,	OVERLAY_VALUE,		print_overlay_cb },
+{ "DEFAULT",	12,	OVERLAY_DEFAULT,	print_overlay_cb },
+{ "POSSIBLE",	12,	OVERLAY_POSSIBLE,	print_overlay_cb },
+{ NULL,		0,	0,	NULL }
+};
+
+typedef enum {
+	OVERLAY_FMA_LINK,
+	OVERLAY_FMA_STATUS,
+	OVERLAY_FMA_DETAILS
+} overlay_fma_field_index_t;
+
+static const ofmt_field_t overlay_fma_fields[] = {
+{ "LINK",	14,	OVERLAY_FMA_LINK,	print_overlay_fma_cb },
+{ "STATUS",	8,	OVERLAY_FMA_STATUS,	print_overlay_fma_cb },
+{ "DETAILS",	58,	OVERLAY_FMA_DETAILS,	print_overlay_fma_cb },
+{ NULL,		0,	0,			NULL }
+};
+
+typedef enum {
+	OVERLAY_TARG_LINK,
+	OVERLAY_TARG_TARGET,
+	OVERLAY_TARG_DEST
+} overlay_targ_field_index_t;
+
+static const ofmt_field_t overlay_targ_fields[] = {
+{ "LINK",		14,	OVERLAY_TARG_LINK,	print_overlay_targ_cb },
+{ "TARGET",		8,	OVERLAY_TARG_TARGET,	print_overlay_targ_cb },
+{ "DESTINATION",	58,	OVERLAY_TARG_DEST,	print_overlay_targ_cb },
+{ NULL,			0,	0,			NULL }
+};
 
 static char *progname;
 static sig_atomic_t signalled;
@@ -2495,12 +2568,16 @@ do_rename_link(int argc, char *argv[], const char *use)
 	char		*link1, *link2;
 	char		*altroot = NULL;
 	dladm_status_t	status;
+	char		*zonename = NULL;
 
 	opterr = 0;
-	while ((option = getopt_long(argc, argv, ":R:", lopts, NULL)) != -1) {
+	while ((option = getopt_long(argc, argv, ":R:z:", lopts, NULL)) != -1) {
 		switch (option) {
 		case 'R':
 			altroot = optarg;
+			break;
+		case 'z':
+			zonename = optarg;
 			break;
 		default:
 			die_opterr(optopt, option, use);
@@ -2517,7 +2594,7 @@ do_rename_link(int argc, char *argv[], const char *use)
 
 	link1 = argv[optind++];
 	link2 = argv[optind];
-	if ((status = dladm_rename_link(handle, link1, link2)) !=
+	if ((status = dladm_rename_link(handle, zonename, link1, link2)) !=
 	    DLADM_STATUS_OK)
 		die_dlerr(status, "rename operation failed");
 }
@@ -3407,11 +3484,12 @@ do_show_link(int argc, char *argv[], const char *use)
 	ofmt_handle_t	ofmt;
 	ofmt_status_t	oferr;
 	uint_t		ofmtflags = 0;
+	char		*zonename = NULL;
 
 	bzero(&state, sizeof (state));
 
 	opterr = 0;
-	while ((option = getopt_long(argc, argv, ":pPsSi:o:",
+	while ((option = getopt_long(argc, argv, ":pPsSi:o:z:",
 	    show_lopts, NULL)) != -1) {
 		switch (option) {
 		case 'p':
@@ -3450,6 +3528,9 @@ do_show_link(int argc, char *argv[], const char *use)
 			if (!dladm_str2interval(optarg, &interval))
 				die("invalid interval value '%s'", optarg);
 			break;
+		case 'z':
+			zonename = optarg;
+			break;
 		default:
 			die_opterr(optopt, option, use);
 			break;
@@ -3475,8 +3556,8 @@ do_show_link(int argc, char *argv[], const char *use)
 		if (strlcpy(linkname, argv[optind], MAXLINKNAMELEN) >=
 		    MAXLINKNAMELEN)
 			die("link name too long");
-		if ((status = dladm_name2info(handle, linkname, &linkid, &f,
-		    NULL, NULL)) != DLADM_STATUS_OK) {
+		if ((status = dladm_zname2info(handle, zonename, linkname,
+		    &linkid, &f, NULL, NULL)) != DLADM_STATUS_OK) {
 			die_dlerr(status, "link %s is not valid", linkname);
 		}
 
@@ -4741,6 +4822,12 @@ do_create_vnic(int argc, char *argv[], const char *use)
 	if ((flags & DLADM_OPT_FORCE) != 0 && vid == 0)
 		die("-f option can only be used with -v");
 
+	/*
+	 * If creating a transient VNIC for a zone, mark it in the kernel.
+	 */
+	if (strstr(propstr, "zone=") != NULL && !(flags & DLADM_OPT_PERSIST))
+		flags |= DLADM_OPT_TRANSIENT;
+
 	if (mac_prefix_len != 0 && mac_addr_type != VNIC_MAC_ADDR_TYPE_RANDOM &&
 	    mac_addr_type != VNIC_MAC_ADDR_TYPE_FIXED)
 		usage();
@@ -4832,9 +4919,10 @@ do_delete_vnic_common(int argc, char *argv[], const char *use,
 	datalink_id_t linkid;
 	char *altroot = NULL;
 	dladm_status_t status;
+	char	*zonename = NULL;
 
 	opterr = 0;
-	while ((option = getopt_long(argc, argv, ":R:t", lopts,
+	while ((option = getopt_long(argc, argv, ":R:tz:", lopts,
 	    NULL)) != -1) {
 		switch (option) {
 		case 't':
@@ -4842,6 +4930,9 @@ do_delete_vnic_common(int argc, char *argv[], const char *use,
 			break;
 		case 'R':
 			altroot = optarg;
+			break;
+		case 'z':
+			zonename = optarg;
 			break;
 		default:
 			die_opterr(optopt, option, use);
@@ -4855,8 +4946,8 @@ do_delete_vnic_common(int argc, char *argv[], const char *use,
 	if (altroot != NULL)
 		altroot_cmd(altroot, argc, argv);
 
-	status = dladm_name2info(handle, argv[optind], &linkid, NULL, NULL,
-	    NULL);
+	status = dladm_zname2info(handle, zonename, argv[optind], &linkid, NULL,
+	    NULL, NULL);
 	if (status != DLADM_STATUS_OK)
 		die("invalid link name '%s'", argv[optind]);
 
@@ -4988,6 +5079,9 @@ print_vnic(show_vnic_state_t *state, datalink_id_t linkid)
 	char			vnic_name[MAXLINKNAMELEN];
 	char			mstr[MAXMACADDRLEN * 3];
 	vnic_fields_buf_t	vbuf;
+	uint_t			valcnt = 1;
+	char			zonename[DLADM_PROP_VAL_MAX + 1];
+	char			*valptr[1];
 
 	if ((status = dladm_vnic_info(handle, linkid, vnic, state->vs_flags)) !=
 	    DLADM_STATUS_OK)
@@ -5016,6 +5110,18 @@ print_vnic(show_vnic_state_t *state, datalink_id_t linkid)
 	    dladm_datalink_id2info(handle, vnic->va_link_id, NULL, NULL,
 	    NULL, devname, sizeof (devname)) != DLADM_STATUS_OK)
 		(void) sprintf(devname, "?");
+
+
+	zonename[0] = '\0';
+	if (!is_etherstub) {
+		valptr[0] = zonename;
+		(void) dladm_get_linkprop(handle, linkid,
+		    DLADM_PROP_VAL_CURRENT, "zone", (char **)valptr, &valcnt);
+	}
+
+	if (state->vs_zonename != NULL &&
+	    strcmp(state->vs_zonename, zonename) != 0)
+		return (DLADM_STATUS_OK);
 
 	state->vs_found = B_TRUE;
 	if (state->vs_stats) {
@@ -5092,6 +5198,13 @@ print_vnic(show_vnic_state_t *state, datalink_id_t linkid)
 
 			(void) snprintf(vbuf.vnic_vid, sizeof (vbuf.vnic_vid),
 			    "%d", vnic->va_vid);
+
+			if (zonename[0] != '\0')
+				(void) snprintf(vbuf.vnic_zone,
+				    sizeof (vbuf.vnic_zone), "%s", zonename);
+			else
+				(void) strlcpy(vbuf.vnic_zone, "--",
+				    sizeof (vbuf.vnic_zone));
 		}
 
 		ofmt_print(state->vs_ofmt, &vbuf);
@@ -5130,10 +5243,11 @@ do_show_vnic_common(int argc, char *argv[], const char *use,
 	ofmt_handle_t		ofmt;
 	ofmt_status_t		oferr;
 	uint_t			ofmtflags = 0;
+	char			*zonename = NULL;
 
 	bzero(&state, sizeof (state));
 	opterr = 0;
-	while ((option = getopt_long(argc, argv, ":pPl:si:o:", lopts,
+	while ((option = getopt_long(argc, argv, ":pPl:si:o:z:", lopts,
 	    NULL)) != -1) {
 		switch (option) {
 		case 'p':
@@ -5172,6 +5286,9 @@ do_show_vnic_common(int argc, char *argv[], const char *use,
 			o_arg = B_TRUE;
 			fields_str = optarg;
 			break;
+		case 'z':
+			zonename = optarg;
+			break;
 		default:
 			die_opterr(optopt, option, use);
 		}
@@ -5182,8 +5299,8 @@ do_show_vnic_common(int argc, char *argv[], const char *use,
 
 	/* get vnic ID (optional last argument) */
 	if (optind == (argc - 1)) {
-		status = dladm_name2info(handle, argv[optind], &linkid, NULL,
-		    NULL, NULL);
+		status = dladm_zname2info(handle, zonename, argv[optind],
+		    &linkid, NULL, NULL, NULL);
 		if (status != DLADM_STATUS_OK) {
 			die_dlerr(status, "invalid vnic name '%s'",
 			    argv[optind]);
@@ -5194,8 +5311,8 @@ do_show_vnic_common(int argc, char *argv[], const char *use,
 	}
 
 	if (l_arg) {
-		status = dladm_name2info(handle, state.vs_link, &dev_linkid,
-		    NULL, NULL, NULL);
+		status = dladm_zname2info(handle, zonename, state.vs_link,
+		    &dev_linkid, NULL, NULL, NULL);
 		if (status != DLADM_STATUS_OK) {
 			die_dlerr(status, "invalid link name '%s'",
 			    state.vs_link);
@@ -5207,6 +5324,7 @@ do_show_vnic_common(int argc, char *argv[], const char *use,
 	state.vs_etherstub = etherstub;
 	state.vs_found = B_FALSE;
 	state.vs_flags = flags;
+	state.vs_zonename = zonename;
 
 	if (!o_arg || (o_arg && strcasecmp(fields_str, "all") == 0)) {
 		if (etherstub)
@@ -6695,6 +6813,7 @@ do_show_linkprop(int argc, char **argv, const char *use)
 	ofmt_handle_t		ofmt;
 	ofmt_status_t		oferr;
 	uint_t			ofmtflags = 0;
+	char			*zonename = NULL;
 
 	bzero(propstr, DLADM_STRSIZE);
 	opterr = 0;
@@ -6705,7 +6824,7 @@ do_show_linkprop(int argc, char **argv, const char *use)
 	state.ls_header = B_TRUE;
 	state.ls_retstatus = DLADM_STATUS_OK;
 
-	while ((option = getopt_long(argc, argv, ":p:cPo:",
+	while ((option = getopt_long(argc, argv, ":p:cPo:z:",
 	    prop_longopts, NULL)) != -1) {
 		switch (option) {
 		case 'p':
@@ -6724,6 +6843,9 @@ do_show_linkprop(int argc, char **argv, const char *use)
 		case 'o':
 			fields_str = optarg;
 			break;
+		case 'z':
+			zonename = optarg;
+			break;
 		default:
 			die_opterr(optopt, option, use);
 			break;
@@ -6731,8 +6853,8 @@ do_show_linkprop(int argc, char **argv, const char *use)
 	}
 
 	if (optind == (argc - 1)) {
-		if ((status = dladm_name2info(handle, argv[optind], &linkid,
-		    NULL, NULL, NULL)) != DLADM_STATUS_OK) {
+		if ((status = dladm_zname2info(handle, zonename, argv[optind],
+		    &linkid, NULL, NULL, NULL)) != DLADM_STATUS_OK) {
 			die_dlerr(status, "link %s is not valid", argv[optind]);
 		}
 	} else if (optind != argc) {
@@ -6743,6 +6865,7 @@ do_show_linkprop(int argc, char **argv, const char *use)
 	    != DLADM_STATUS_OK)
 		die("invalid link properties specified");
 	state.ls_proplist = proplist;
+	state.ls_zonename = zonename;
 	state.ls_status = DLADM_STATUS_OK;
 
 	if (state.ls_parsable)
@@ -6785,6 +6908,17 @@ show_linkprop_onelink(dladm_handle_t hdl, datalink_id_t linkid, void *arg)
 	    statep->ls_link, MAXLINKNAMELEN) != DLADM_STATUS_OK) {
 		statep->ls_status = DLADM_STATUS_NOTFOUND;
 		return (DLADM_WALK_CONTINUE);
+	}
+
+	if (statep->ls_zonename != NULL) {
+		datalink_id_t	tlinkid;
+
+		if (dladm_zname2info(hdl, statep->ls_zonename, statep->ls_link,
+		    &tlinkid, NULL, NULL, NULL) != DLADM_STATUS_OK ||
+		    linkid != tlinkid) {
+			statep->ls_status = DLADM_STATUS_NOTFOUND;
+			return (DLADM_WALK_CONTINUE);
+		}
 	}
 
 	if ((statep->ls_persist && !(flags & DLADM_OPT_PERSIST)) ||
@@ -6869,11 +7003,12 @@ set_linkprop(int argc, char **argv, boolean_t reset, const char *use)
 	dladm_status_t		status = DLADM_STATUS_OK;
 	char			propstr[DLADM_STRSIZE];
 	dladm_arg_list_t	*proplist = NULL;
+	char			*zonename = NULL;
 
 	opterr = 0;
 	bzero(propstr, DLADM_STRSIZE);
 
-	while ((option = getopt_long(argc, argv, ":p:R:t",
+	while ((option = getopt_long(argc, argv, ":p:R:tz:",
 	    prop_longopts, NULL)) != -1) {
 		switch (option) {
 		case 'p':
@@ -6887,6 +7022,9 @@ set_linkprop(int argc, char **argv, boolean_t reset, const char *use)
 			break;
 		case 'R':
 			altroot = optarg;
+			break;
+		case 'z':
+			zonename = optarg;
 			break;
 		default:
 			die_opterr(optopt, option, use);
@@ -6910,8 +7048,8 @@ set_linkprop(int argc, char **argv, boolean_t reset, const char *use)
 		altroot_cmd(altroot, argc, argv);
 	}
 
-	status = dladm_name2info(handle, argv[optind], &linkid, NULL, NULL,
-	    NULL);
+	status = dladm_zname2info(handle, zonename, argv[optind], &linkid,
+	    NULL, NULL, NULL);
 	if (status != DLADM_STATUS_OK)
 		die_dlerr(status, "link %s is not valid", argv[optind]);
 
@@ -9688,4 +9826,661 @@ do_up_part(int argc, char *argv[], const char *use)
 	}
 
 	(void) dladm_part_up(handle, partid, 0);
+}
+
+static void
+do_create_overlay(int argc, char *argv[], const char *use)
+{
+	int			opt;
+	char			*encap = NULL, *endp, *search = NULL;
+	char			name[MAXLINKNAMELEN];
+	dladm_status_t		status;
+	uint32_t		flags = DLADM_OPT_ACTIVE | DLADM_OPT_TRANSIENT;
+	uint64_t		vid;
+	boolean_t		havevid = B_FALSE;
+	char			propstr[DLADM_STRSIZE];
+	dladm_arg_list_t	*proplist = NULL;
+
+	bzero(propstr, sizeof (propstr));
+	while ((opt = getopt(argc, argv, ":e:v:p:s:")) != -1) {
+		switch (opt) {
+		case 'e':
+			encap = optarg;
+			break;
+		case 's':
+			search = optarg;
+			break;
+		case 'p':
+			(void) strlcat(propstr, optarg, DLADM_STRSIZE);
+			if (strlcat(propstr, ",", DLADM_STRSIZE) >=
+			    DLADM_STRSIZE)
+				die("property list too long '%s'", propstr);
+			break;
+		case 'v':
+			vid = strtoul(optarg, &endp, 10);
+			if (*endp != '\0' || (vid == 0 && errno == EINVAL))
+				die("couldn't parse virtual networkd id: %s",
+				    optarg);
+			if (vid == ULONG_MAX && errno == ERANGE)
+				die("virtual networkd id too large: %s",
+				    optarg);
+			havevid = B_TRUE;
+			break;
+		default:
+			die_opterr(optopt, opt, use);
+		}
+	}
+
+	if (havevid == B_FALSE)
+		die("missing required virtual network id");
+
+	if (encap == NULL)
+		die("missing required encapsulation plugin");
+
+	if (encap == NULL)
+		die("missing required search plugin");
+
+	if (optind != (argc - 1))
+		usage();
+
+	if (strlcpy(name, argv[optind], MAXLINKNAMELEN) >= MAXLINKNAMELEN)
+		die("link name too long '%s'", argv[optind]);
+
+	if (!dladm_valid_linkname(name))
+		die("invalid link name '%s'", argv[optind]);
+
+	if (strlen(encap) + 1 > MAXLINKNAMELEN)
+		die("encapsulation plugin name too long '%s'", encap);
+
+	if (strlen(search) + 1 > MAXLINKNAMELEN)
+		die("search plugin name too long '%s'", encap);
+
+	if (dladm_parse_link_props(propstr, &proplist, B_FALSE)
+	    != DLADM_STATUS_OK)
+		die("invalid overlay property");
+
+	status = dladm_overlay_create(handle, name, encap, search, vid,
+	    proplist, flags);
+	dladm_free_props(proplist);
+	if (status != DLADM_STATUS_OK) {
+		die_dlerr(status, "overlay creation failed");
+	}
+}
+
+static void
+do_delete_overlay(int argc, char *argv[], const char *use)
+{
+	datalink_id_t	linkid = DATALINK_ALL_LINKID;
+	dladm_status_t	status;
+
+	if (argc != 2) {
+		usage();
+	}
+
+	status = dladm_name2info(handle, argv[1], &linkid, NULL, NULL, NULL);
+	if (status != DLADM_STATUS_OK)
+		die_dlerr(status, "failed to delete %s", argv[1]);
+
+	status = dladm_overlay_delete(handle, linkid);
+	if (status != DLADM_STATUS_OK)
+		die_dlerr(status, "failed to delete %s", argv[1]);
+}
+
+typedef struct showoverlay_state {
+	ofmt_handle_t		sho_ofmt;
+	const char 		*sho_linkname;
+	dladm_overlay_propinfo_handle_t sho_info;
+	uint8_t			sho_value[DLADM_OVERLAY_PROP_SIZEMAX];
+	uint32_t		sho_size;
+} showoverlay_state_t;
+
+typedef struct showoverlay_fma_state {
+	ofmt_handle_t		shof_ofmt;
+	const char		*shof_linkname;
+	dladm_overlay_status_t	*shof_status;
+} showoverlay_fma_state_t;
+
+typedef struct showoverlay_targ_state {
+	ofmt_handle_t			shot_ofmt;
+	const char			*shot_linkname;
+	const struct ether_addr		*shot_key;
+	const dladm_overlay_point_t	*shot_point;
+} showoverlay_targ_state_t;
+
+/*
+ * TODO This uses the OVERLAY_PROP_ macros and the like from the kernel. Is it
+ * all right to expose them?
+ */
+static void
+print_overlay_value(char *outbuf, uint_t bufsize, uint_t type, const void *pbuf,
+    const size_t psize)
+{
+	const struct in6_addr *ipv6;
+	struct in_addr ip;
+
+	switch (type) {
+	case OVERLAY_PROP_T_INT:
+		if (psize != 1 && psize != 2 && psize != 4 && psize != 8) {
+			snprintf(outbuf, bufsize, "?");
+			break;
+		}
+		if (psize == 1)
+			snprintf(outbuf, bufsize, "%d", *(int8_t *)pbuf);
+		if (psize == 2)
+			snprintf(outbuf, bufsize, "%d", *(int16_t *)pbuf);
+		if (psize == 4)
+			snprintf(outbuf, bufsize, "%d", *(int32_t *)pbuf);
+		if (psize == 8)
+			snprintf(outbuf, bufsize, "%d", *(int64_t *)pbuf);
+		break;
+	case OVERLAY_PROP_T_UINT:
+		if (psize != 1 && psize != 2 && psize != 4 && psize != 8) {
+			snprintf(outbuf, bufsize, "?");
+			break;
+		}
+		if (psize == 1)
+			snprintf(outbuf, bufsize, "%d", *(uint8_t *)pbuf);
+		if (psize == 2)
+			snprintf(outbuf, bufsize, "%d", *(uint16_t *)pbuf);
+		if (psize == 4)
+			snprintf(outbuf, bufsize, "%d", *(uint32_t *)pbuf);
+		if (psize == 8)
+			snprintf(outbuf, bufsize, "%d", *(uint64_t *)pbuf);
+		break;
+	case OVERLAY_PROP_T_IP:
+		if (psize != sizeof (struct in6_addr)) {
+			warn("malformed overlay IP property: %d bytes\n",
+			    psize);
+			(void) snprintf(outbuf, bufsize, "--");
+			break;
+		}
+
+		ipv6 = pbuf;
+		if (IN6_IS_ADDR_V4MAPPED(ipv6)) {
+			IN6_V4MAPPED_TO_INADDR(ipv6, &ip);
+			if (inet_ntop(AF_INET, &ip, outbuf, bufsize) == NULL) {
+				warn("malformed overlay IP property\n");
+				(void) snprintf(outbuf, bufsize, "--");
+				break;
+			}
+		} else {
+			if (inet_ntop(AF_INET6, ipv6, outbuf, bufsize) ==
+			    NULL) {
+				warn("malformed overlay IP property\n");
+				(void) snprintf(outbuf, bufsize, "--");
+				break;
+			}
+		}
+
+		break;
+	case OVERLAY_PROP_T_STRING:
+		(void) snprintf(outbuf, bufsize, "%s", pbuf);
+		break;
+	default:
+		abort();
+	}
+
+	return;
+
+}
+
+static boolean_t
+print_overlay_cb(ofmt_arg_t *ofarg, char *buf, uint_t bufsize)
+{
+	dladm_status_t 			status;
+	showoverlay_state_t		*sp = ofarg->ofmt_cbarg;
+	dladm_overlay_propinfo_handle_t	infop = sp->sho_info;
+	const char 			*pname;
+	uint_t				type, prot;
+	const void			*def;
+	uint32_t			defsize;
+	const mac_propval_range_t	*rangep;
+
+	if ((status = dladm_overlay_prop_info(infop, &pname, &type, &prot, &def,
+	    &defsize, &rangep)) != DLADM_STATUS_OK) {
+		warn_dlerr(status, "failed to get get property info");
+		return (B_TRUE);
+	}
+
+	switch (ofarg->ofmt_id) {
+	case OVERLAY_LINK:
+		snprintf(buf, bufsize, "%s", sp->sho_linkname);
+		break;
+	case OVERLAY_PROPERTY:
+		snprintf(buf, bufsize, "%s", pname);
+		break;
+	case OVERLAY_PERM:
+		if ((prot & OVERLAY_PROP_PERM_RW) == OVERLAY_PROP_PERM_RW) {
+			snprintf(buf, bufsize, "%s", "rw");
+		} else if ((prot & OVERLAY_PROP_PERM_RW) ==
+		    OVERLAY_PROP_PERM_READ) {
+			snprintf(buf, bufsize, "%s", "r-");
+		} else {
+			snprintf(buf, bufsize, "%s", "--");
+		}
+		break;
+	case OVERLAY_REQ:
+		snprintf(buf, bufsize, "%s",
+		    prot & OVERLAY_PROP_PERM_REQ ? "y" : "-");
+		break;
+	case OVERLAY_VALUE:
+		if (sp->sho_size == 0) {
+			snprintf(buf, bufsize, "%s", "--");
+		} else {
+			print_overlay_value(buf, bufsize, type, sp->sho_value,
+			    sp->sho_size);
+		}
+		break;
+	case OVERLAY_DEFAULT:
+		if (defsize == 0) {
+			snprintf(buf, bufsize, "%s", "--");
+		} else {
+			print_overlay_value(buf, bufsize, type, def, defsize);
+		}
+		break;
+	case OVERLAY_POSSIBLE: {
+		int i;
+		char **vals, *ptr, *lim;
+		if (rangep->mpr_count == 0) {
+			snprintf(buf, bufsize, "%s", "--");
+			break;
+		}
+
+		vals = malloc((sizeof (char *) + DLADM_PROP_VAL_MAX) *
+		    rangep->mpr_count);
+		if (vals == NULL)
+			die("insufficient memory");
+		for (i = 0; i < rangep->mpr_count; i++) {
+			vals[i] = (char *)vals + sizeof (char *) *
+			    rangep->mpr_count + i * DLADM_MAX_PROP_VALCNT;
+		}
+
+		if (dladm_range2strs(rangep, vals) != 0) {
+			free(vals);
+			snprintf(buf, bufsize, "%s", "?");
+			break;
+		}
+
+		ptr = buf;
+		lim = buf + bufsize;
+		for (i = 0; i < rangep->mpr_count; i++) {
+			ptr += snprintf(ptr, lim - ptr, "%s,", vals[i]);
+			if (ptr >= lim)
+				break;
+		}
+		if (rangep->mpr_count > 0)
+			buf[strlen(buf) - 1] = '\0';
+		free(vals);
+		break;
+	}
+	default:
+		abort();
+	}
+	return (B_TRUE);
+}
+
+static int
+dladm_overlay_show_one(dladm_handle_t handle, datalink_id_t linkid,
+    dladm_overlay_propinfo_handle_t phdl, void *arg)
+{
+	showoverlay_state_t *sp = arg;
+	sp->sho_info = phdl;
+
+	sp->sho_size = sizeof (sp->sho_value);
+	if (dladm_overlay_get_prop(handle, linkid, phdl, &sp->sho_value,
+	    &sp->sho_size) != DLADM_STATUS_OK)
+		return (DLADM_WALK_CONTINUE);
+
+	ofmt_print(sp->sho_ofmt, sp);
+	return (DLADM_WALK_CONTINUE);
+}
+
+static int
+show_one_overlay(dladm_handle_t hdl, datalink_id_t linkid, void *arg)
+{
+	char			buf[MAXLINKNAMELEN];
+	showoverlay_state_t	state;
+	datalink_class_t	class;
+
+	if (dladm_datalink_id2info(hdl, linkid, NULL, &class, NULL, buf,
+	    MAXLINKNAMELEN) != DLADM_STATUS_OK ||
+	    class != DATALINK_CLASS_OVERLAY)
+		return (DLADM_WALK_CONTINUE);
+
+	state.sho_linkname = buf;
+	state.sho_ofmt = arg;
+
+	(void) dladm_overlay_walk_prop(handle, linkid, dladm_overlay_show_one,
+	    &state);
+
+	return (DLADM_WALK_CONTINUE);
+}
+
+static boolean_t
+print_overlay_targ_cb(ofmt_arg_t *ofarg, char *buf, uint_t bufsize)
+{
+	char				keybuf[ETHERADDRSTRL];
+	const showoverlay_targ_state_t	*shot = ofarg->ofmt_cbarg;
+	const dladm_overlay_point_t	*point = shot->shot_point;
+	char				macbuf[ETHERADDRSTRL];
+	char				ipbuf[INET6_ADDRSTRLEN];
+	custr_t				*cus;
+
+	switch (ofarg->ofmt_id) {
+	case OVERLAY_TARG_LINK:
+		snprintf(buf, bufsize, shot->shot_linkname);
+		break;
+	case OVERLAY_TARG_TARGET:
+		if ((point->dop_flags & DLADM_OVERLAY_F_DEFAULT) != 0) {
+			(void) snprintf(buf, bufsize, "*:*:*:*:*:*");
+		} else {
+			if (ether_ntoa_r(shot->shot_key, keybuf) == NULL) {
+				warn("encountered malformed mac address key\n");
+				return (B_FALSE);
+			}
+			snprintf(buf, bufsize, "%s", keybuf);
+		}
+		break;
+	case OVERLAY_TARG_DEST:
+		if (custr_alloc_buf(&cus, buf, bufsize) != 0) {
+			die("ran out of memory for printing the overlay "
+			    "target destination");
+		}
+
+		if (point->dop_dest & OVERLAY_PLUGIN_D_ETHERNET) {
+			if (ether_ntoa_r(&point->dop_mac, macbuf) == NULL) {
+				warn("encountered malformed mac address target "
+				    "for key %s\n", keybuf);
+				return (B_FALSE);
+			}
+			(void) custr_append(cus, macbuf);
+		}
+
+		if (point->dop_dest & OVERLAY_PLUGIN_D_IP) {
+			if (IN6_IS_ADDR_V4MAPPED(&point->dop_ip)) {
+				struct in_addr v4;
+				IN6_V4MAPPED_TO_INADDR(&point->dop_ip, &v4);
+				if (inet_ntop(AF_INET, &v4, ipbuf,
+				    sizeof (ipbuf)) == NULL)
+					abort();
+			} else if (inet_ntop(AF_INET6, &point->dop_ip, ipbuf,
+			    sizeof (ipbuf)) == NULL) {
+				/*
+				 * The only failrues we should get are
+				 * EAFNOSUPPORT and ENOSPC because of buffer
+				 * exhaustion. In either of these cases, that
+				 * means something has gone horribly wrong.
+				 */
+				abort();
+			}
+			if (point->dop_dest & OVERLAY_PLUGIN_D_ETHERNET)
+				(void) custr_appendc(cus, ',');
+			(void) custr_append(cus, ipbuf);
+		}
+
+		if (point->dop_dest & OVERLAY_PLUGIN_D_PORT) {
+			if (point->dop_dest & OVERLAY_PLUGIN_D_IP)
+				(void) custr_appendc(cus, ':');
+			else if (point->dop_dest & OVERLAY_PLUGIN_D_ETHERNET)
+				(void) custr_appendc(cus, ',');
+			(void) custr_append_printf(cus, "%u", point->dop_port);
+		}
+
+		custr_free(cus);
+
+		break;
+	}
+	return (B_TRUE);
+}
+
+static int
+show_one_overlay_table_entry(dladm_handle_t handle, datalink_id_t linkid,
+    const struct ether_addr *key, const dladm_overlay_point_t *point, void *arg)
+{
+	showoverlay_targ_state_t	*shot = arg;
+
+	shot->shot_key = key;
+	shot->shot_point = point;
+	ofmt_print(shot->shot_ofmt, shot);
+
+	return (DLADM_WALK_CONTINUE);
+}
+
+static int
+show_one_overlay_table(dladm_handle_t handle, datalink_id_t linkid, void *arg)
+{
+	char				linkbuf[MAXLINKNAMELEN];
+	int				ret;
+	showoverlay_targ_state_t	shot;
+	datalink_class_t		class;
+
+	if (dladm_datalink_id2info(handle, linkid, NULL, &class, NULL, linkbuf,
+	    MAXLINKNAMELEN) != DLADM_STATUS_OK ||
+	    class != DATALINK_CLASS_OVERLAY)
+		return (DLADM_WALK_CONTINUE);
+
+	shot.shot_ofmt = arg;
+	shot.shot_linkname = linkbuf;
+
+	ret = dladm_overlay_walk_cache(handle, linkid,
+	    show_one_overlay_table_entry, &shot);
+
+	return (DLADM_WALK_CONTINUE);
+}
+
+static boolean_t
+print_overlay_fma_cb(ofmt_arg_t *ofarg, char *buf, uint_t bufsize)
+{
+	showoverlay_fma_state_t	*shof = ofarg->ofmt_cbarg;
+	dladm_overlay_status_t	*st = shof->shof_status;
+
+	switch (ofarg->ofmt_id) {
+	case OVERLAY_FMA_LINK:
+		snprintf(buf, bufsize, "%s", shof->shof_linkname);
+		break;
+	case OVERLAY_FMA_STATUS:
+		snprintf(buf, bufsize, st->dos_degraded == B_TRUE ?
+		    "DEGRADED": "ONLINE");
+		break;
+	case OVERLAY_FMA_DETAILS:
+		snprintf(buf, bufsize, "%s", st->dos_degraded == B_TRUE ?
+		    st->dos_fmamsg : "-");
+		break;
+	default:
+		abort();
+	}
+	return (B_TRUE);
+}
+
+static void
+show_one_overlay_fma_cb(dladm_handle_t handle, datalink_id_t linkid,
+    dladm_overlay_status_t *stat, void *arg)
+{
+	showoverlay_fma_state_t	*shof = arg;
+
+	ofmt_print(shof->shof_ofmt, arg);
+}
+
+
+static int
+show_one_overlay_fma(dladm_handle_t handle, datalink_id_t linkid, void *arg)
+{
+	dladm_status_t		status;
+	char			linkbuf[MAXLINKNAMELEN];
+	datalink_class_t	class;
+	showoverlay_fma_state_t	shof;
+
+	if (dladm_datalink_id2info(handle, linkid, NULL, &class, NULL, linkbuf,
+	    MAXLINKNAMELEN) != DLADM_STATUS_OK ||
+	    class != DATALINK_CLASS_OVERLAY) {
+		die("datalink %s is not an overlay device\n", linkbuf);
+	}
+
+	shof.shof_ofmt = arg;
+	shof.shof_linkname = linkbuf;
+
+	status = dladm_overlay_status(handle, linkid,
+	    show_one_overlay_fma_cb, &shof);
+	if (status != DLADM_STATUS_OK)
+		die_dlerr(status, "failed to obtain device status for %s",
+		    linkbuf);
+
+	return (DLADM_WALK_CONTINUE);
+}
+
+/* TODO Do we want to be able to select on properties here? */
+static void
+do_show_overlay(int argc, char *argv[], const char *use)
+{
+	int			i, opt;
+	datalink_id_t		linkid = DATALINK_ALL_LINKID;
+	dladm_status_t		status;
+	int 			(*funcp)(dladm_handle_t, datalink_id_t, void *);
+	char			*fields_str = NULL;
+	const ofmt_field_t	*fieldsp;
+	ofmt_status_t		oferr;
+	boolean_t		parse;
+	ofmt_handle_t		ofmt;
+	uint_t			ofmtflags;
+	int			err;
+
+
+	funcp = show_one_overlay;
+	fieldsp = overlay_fields;
+	parse = B_FALSE;
+	ofmtflags = OFMT_WRAP;
+	while ((opt = getopt(argc, argv, ":o:pft")) != -1) {
+		switch (opt) {
+		case 'f':
+			funcp = show_one_overlay_fma;
+			fieldsp = overlay_fma_fields;
+			break;
+		case 'o':
+			fields_str = optarg;
+			break;
+		case 'p':
+			parse = B_TRUE;
+			ofmtflags = OFMT_PARSABLE;
+			break;
+		case 't':
+			funcp = show_one_overlay_table;
+			fieldsp = overlay_targ_fields;
+			break;
+		default:
+			die_opterr(optopt, opt, use);
+		}
+	}
+
+	if (fields_str != NULL && strcasecmp(fields_str, "all") == 0)
+		fields_str = NULL;
+
+	oferr = ofmt_open(fields_str, fieldsp, ofmtflags, 0, &ofmt);
+	dladm_ofmt_check(oferr, parse, ofmt);
+
+	err = 0;
+	if (argc > optind) {
+		for (i = optind; i < argc; i++) {
+			status = dladm_name2info(handle, argv[i], &linkid,
+			    NULL, NULL, NULL);
+			if (status != DLADM_STATUS_OK) {
+				warn_dlerr(status, "failed to find %s",
+				    argv[i]);
+				err = 1;
+				continue;
+			}
+			funcp(handle, linkid, ofmt);
+		}
+	} else {
+		(void) dladm_walk_datalink_id(funcp, handle, ofmt,
+		    DATALINK_CLASS_OVERLAY, DATALINK_ANY_MEDIATYPE,
+		    DLADM_OPT_ACTIVE);
+	}
+	ofmt_close(ofmt);
+
+	exit(err);
+}
+
+static void
+do_modify_overlay(int argc, char *argv[], const char *use)
+{
+	int			opt, ocnt = 0;
+	boolean_t		flush, set, delete;
+	struct ether_addr	e;
+	char			*dest;
+	datalink_id_t		linkid = DATALINK_ALL_LINKID;
+	dladm_status_t		status;
+
+	flush = set = delete = B_FALSE;
+	while ((opt = getopt(argc, argv, ":fd:s:")) != -1) {
+		switch (opt) {
+		case 'd':
+			if (delete == B_TRUE)
+				die_optdup('d');
+			delete = B_TRUE;
+			ocnt++;
+			if (ether_aton_r(optarg, &e) == NULL)
+				die("invalid mac address: %s\n", optarg);
+			break;
+		case 'f':
+			if (flush == B_TRUE)
+				die_optdup('f');
+			flush = B_TRUE;
+			ocnt++;
+			break;
+		case 's':
+			if (set == B_TRUE)
+				die_optdup('s');
+			set = B_TRUE;
+			ocnt++;
+			dest = strchr(optarg, '=');
+			*dest = '\0';
+			dest++;
+			if (dest == NULL)
+				die("malformed value, expected mac=dest, "
+				    "got: %s\n", optarg);
+			if (ether_aton_r(optarg, &e) == NULL)
+				die("invalid mac address: %s\n", optarg);
+			break;
+		default:
+			die_opterr(optopt, opt, use);
+		}
+	}
+
+	if (ocnt == 0)
+		die("need to specify one of -d, -f, or -s");
+	if (ocnt > 1)
+		die("only one of -d, -f, or -s may be used");
+
+	if (argv[optind] == NULL)
+		die("missing required overlay device\n");
+	if (argc > optind + 1)
+		die("only one overlay device may be specified\n");
+
+	status = dladm_name2info(handle, argv[optind], &linkid, NULL, NULL,
+	    NULL);
+	if (status != DLADM_STATUS_OK) {
+		die_dlerr(status, "failed to find overlay %s", argv[optind]);
+	}
+
+	if (flush == B_TRUE) {
+		status = dladm_overlay_cache_flush(handle, linkid);
+		if (status != DLADM_STATUS_OK)
+			die_dlerr(status, "failed to flush target cache for "
+			    "overlay %s", argv[optind]);
+	}
+
+	if (delete == B_TRUE) {
+		status = dladm_overlay_cache_delete(handle, linkid, &e);
+		if (status != DLADM_STATUS_OK)
+			die_dlerr(status, "failed to flush target %s from "
+			    "overlay target cache %s", optarg, argv[optind]);
+	}
+
+	if (set == B_TRUE) {
+		status = dladm_overlay_cache_set(handle, linkid, &e, dest);
+		if (status != DLADM_STATUS_OK)
+			die_dlerr(status, "failed to set target %s for overlay "
+			    "target cache %s", optarg, argv[optind]);
+	}
+
 }

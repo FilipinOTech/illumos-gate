@@ -1,0 +1,252 @@
+# Overlay Networks Administration Guide
+
+To better understand the implementation of overlay networks from a
+non-data path point of view, it's useful to put together a straw man
+proposal for how these work from an administration point of view.
+
+This goes through a bunch of options and leaves some open questions. Any
+thoughts on it should be directed to Robert Mustacchi <rm@joyent.com> or
+rmustacc on irc.freenode.net.
+
+## Overlay Devices Background
+
+It's worth going into a bit of background as to what overlay devices
+look like. An overlay device is a combination of an etherstub and an IP
+tunnel device with potentially multiple destinations. An overlay device
+has two different components: an encapsulation module and a search
+module.
+
+The encapsulation module defines how packets get transmitted on the wire
+and aspects of their transport. Consider the two rather popular
+encapsulation methods: VXLAN and NVGRE. The VXLAN specification defines
+the VXLAN header that gets put on an Ethernet frame and then defines
+that it be sent over UDP. NVGRE on the other hand defines that it should
+use a GRE header with a specific GRE protocol field, which is itself is
+a separate IP type.
+
+In addition, today, because they define the mechanism for encapsulation
+and decapsulation, they also define how they should receive packets. In
+other words, what IP address and in the case of VXLAN, port, they
+listen on.
+
+
+The search plugin, on the other hand, defines how we route encapsulated
+packets to a destination. The most simplest form of this is a point to
+point tunnel where the destination plugin sends everything to a single
+unicast IP address. Only slightly more complicated would be something
+that sent it to a single multicast address. However, these plugins also
+allow for custom means of looking up destinations and dynamic
+destinations. In other words, sending an Ethernet frame to a different
+destination based on its mac address or other criteria. This may be
+implemented by having a list of mappings in files, or there may be some
+much more advanced mechanism that integrates with a broader
+orchestration suite or other database. We need to think about both of
+these different classes of search plugins - static and dynamic as we go
+through this.
+
+On top off these devices, a series of VNICs can be created, like an
+etherstub. All their traffic will be subject to a local virtual switch
+and then sent over the encapsulated network.
+
+## Basic model
+
+We want to introduce a new object into dladm that we call an overlay. An
+overlay is its own class, like bridges, IP tunnels, and etherstubs.
+There would generally be four basic commands, much like other parts of
+dladm:
+
+  o dladm create-overlay	-- Creates an overlay device
+  o dladm show-overlay		-- Shows information about overlay devices
+  o dladm modify-overlay	-- Modifies aspects of overlay devices
+  o dladm delete-overlay	-- Remove an overlay device
+
+
+### Example: Creating a point to point VXLAN overlay network
+
+Let's consider the act of creating and manipulating a VXLAN overlay
+network. There are a handful of properties that we care about:
+
+  o The virtual network id, the unique VXLAN identifier
+  o The UDP IP address and port that we're listening on
+  o The UDP IP address and port that we're going to send to
+
+In the VXLAN case, we have a default port that we'd like to use that's
+been assigned by IANA, but obviously, allow it to be overridden. In
+addition, we've listed two implicit properties in this example that we
+want to first class:
+
+  o The encapsulation plugin, VXLAN
+  o The search plugin, a direct point to point tunnel we'll call 'direct'
+
+Here's one idea of how this could look:
+
+```
+dladm create-overlay -e vxlan -s direct -v 169 -p vxlan/listen_ip=a.b.c.d -p direct/dest_ip=e.f.g.h overlay0
+```
+
+If we take this apart, -e specifies the encapsulation module that we
+should use for this device. While -s is specifying that we should use
+the 'direct' search plugin which is a point to point tunnel. While we
+have default values for the vxlan/listen_port and we can use the same
+default for the search plugin, we don't have the same for an IP address.
+Because of this, we have to specify it on the command line.
+
+In this world, -e, -s, and -v are sugar for properties. Respectively the
+properties 'encap', 'search', and 'vnetid' That means this could look
+like:
+
+```
+dladm create-overlay -p encap=vxlan -p search=direct -p vnetid=169 -p vxlan/listen_ip=a.b.c.d -p direct/dest_ip=e.f.g.h overlay0
+```
+
+In addition, much like with other dladm objects, a user would also be
+able to specify other properties on the creation command like, such as
+the vxlan listen port (vxlan/listen_port) or something like the MTU.
+
+I believe that having a summarized version with some options that are
+reflected with abbreviations like in the first form makes sense, but we
+don't want to elevate too much into short letters, otherwise every
+plugin, while overlap exists, will cause us to go through and run out of
+letters.
+
+## Propety namespaces
+
+In the above, you'll notice that we've namespaced various properties
+such as the vxlan/listen_ip. There is nothing special about these
+properties. This is just a way of grouping things in a way that might be
+a bit more useful for folks. This makes it easy to see which properties
+are related to the fact that we're doing vxlan encapsulation or some
+other plugin-based aspect. The unprefixed properties should all be
+generic.
+
+
+## Default and required properties
+
+Each plugin is going to have to define their own set of required
+properties and whether they have default values. For example, vxlan
+defines two properties:
+
+  o  vxlan/listen_ip
+  o  vxlan/listen_port
+
+The listen_port has a default value of 4789. While this is what most
+folks will want to use, some will want to override it at creation time.
+However, just like we can modify the defaults with ipadm, we'll want to
+do the same here and have some mode that allows us to modify them. This
+will allow an administrator to override a default property for their
+site.
+
+In addition to those default, some plugins have properties that require
+an argument, but have no default. There's no good default for an IP
+address to listen on. INADDR_ANY or loop back (and their v6 equivalents)
+are almost certainly wrong choices. As such, the plugins will need to
+define their required properties. This should probably be displayed in
+some way along with the defaults. Perhaps this is done as a new flag on
+modify-overlay and show-overlay to see the default/required sets?
+
+```
+dladm show-overlay -d
+dladm modify-overlay -d
+```
+
+
+## Working through other examples
+
+To help evaluate other behavior and choices, it's worth working through
+some other examples and seeing what kinds of questions this causes us to
+have.
+
+### NVGRE and Geneve
+
+NVGRE and Geneve are other encapsulation modules. NVGRE is already
+widely deployed generally in MSFT related software. Today, it fits the
+model fairly well. NVGRE just has a single property:
+
+  o nvgre/listen_ip
+
+Geneve on the other hand is yet another draft that is supposed to bring
+the titans of NVGRE and VXLAN together. It's another UDP like protocol.
+It has properties like VXLAN:
+
+  o geneve/listen_ip
+  o geneve/listen_port
+
+
+Now, you might be saying, but wait rm, we're always redefining
+listen_ip! Can't we just make that a first class property. Oh and maybe
+listen_port, but wait that NVGRE isn't using it. Hmm.
+
+So, I have thought about this, but I think for the time, I'd rather make
+them specific to the plugin. There may be something new that comes
+around and actually doesn't use IP at all and in fact speaks on an
+ethertype. At which point we'll want to use dls/dlpi/vnd to manage that
+communication and there will not be any IP. Of course, this doesn't
+exist today, but I think it doesn't make sense to elevate it at first.
+If it turns out that this is all terrible, then we can go figure that
+out.
+
+### Multicast
+
+Another common thing that we're going to build out of the gate is a
+multicast module. Unlike the direct model, with the multicast model, the
+user subscribes to a multicast address to receive packets and sends
+packets out to a multicast group. In this case, the normal listen_ip
+would still exist, it would just be a multicast IP. However instead of a
+multicast/direct_ip, we would have:
+
+  o multicast/dest_ip
+
+### Search plugins and different encap types
+
+One of the things that we'd like to do is have an encapsulation
+algorithm encode what it requires to be directed, eg. VXLAN requires and
+IP address and a port. NVGRE just requires an IP. We'll have t work out
+an interface, but the search plugin will be able to get some information
+from the encapsulation plugin which will let it know if it should
+require an IP address, an IP address and a port, or some other set of
+configuration. It will also provide a way to share defaults.
+Realistically, the search plugin, should probably just inherit the
+default from the encap plugin, if appropriate. Otherwise an
+administrator should define a global default for all encapsulation
+plugins for the search module. While the former is useful, the latter
+isn't going to be very realistic.
+
+### Files plugin and dynamic destinations
+
+The files plugin is interesting, because it moves away from the world of
+static maps to dynamic destinations. In this case, the destination of a
+packet with a mac address m, is defined by some file on the system,
+similar to /etc/hosts (but an entirely different format).
+
+The interesting thing about the files model is that it requires some
+additional features, which we need to implement anyways. For example
+we'll need to:
+
+  o Be able to flush the destination map
+  o Obtain some way of getting the destination map from the kernel
+  o For the files case, tell it to refresh the mappings from the file
+  o Update the mapping file to something else
+
+While the last of these would be done through a normal modify-overlay of
+a property, the question is how would we handle all of these other
+actions. They basically have us performing actions on the device that,
+in some cases, are specific to the plugin-type.
+
+How should this be done? Should these be kind of transitive properties
+that exist? Like a 'files/refresh' property that you set to true? I'm
+not sure I really like the idea of transitive properties as much as I
+perhaps want to have some alternative option space to modify-overlay
+perhaps that allows you to inject one of these options.
+
+Perhaps all of these three things instead should be part of some
+command that isn't dladm? I dunno, I'm not really partial to that.
+
+## Concluding Thoughts
+
+All in all, I think we have a reasonable framework to start with, but
+some of these details kind of matter and as we go further down the path
+of implementation, the tradeoffs and options that we want to make will
+make more sense. It may very well be that there will not be many
+properties except for the Joyent or other user specific search
+mechanisms and therefore spending too much time on this isn't
+worthwhile.

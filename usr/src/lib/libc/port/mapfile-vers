@@ -2819,8 +2819,16 @@ $endif
 	_dgettext;
 	_doprnt;
 	_doscan;
+	epoll_create;
+	epoll_create1;
+	epoll_ctl;
+	epoll_wait;
+	epoll_pwait;
 	_errfp;
 	_errxfp;
+	eventfd;
+	eventfd_read;
+	eventfd_write;
 	exportfs;
 	_F_cplx_div;
 	_F_cplx_div_ix;
@@ -2864,6 +2872,10 @@ $endif
 	__idmap_unreg;
 	__init_daemon_priv;
 	__init_suid_priv;
+	inotify_init;
+	inotify_init1;
+	inotify_add_watch;
+	inotify_rm_watch;
 	_insert;
 	inst_sync;
 	_iswctype;
@@ -3057,6 +3069,7 @@ $endif
 	zone_list;
 	zone_list_datalink;
 	zonept;
+	zone_get_nroot;
 	zone_remove_datalink;
 	zone_setattr;
 	zone_shutdown;

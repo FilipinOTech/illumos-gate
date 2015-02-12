@@ -24,6 +24,10 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright (c) 2015, Joyent, Inc.  All rights reserved.
+ */
+
 #ifndef	_SYS_THREAD_H
 #define	_SYS_THREAD_H
 
@@ -68,6 +72,8 @@ typedef struct ctxop {
 	void	(*free_op)(void *, int); /* function which frees the context */
 	void	*arg;		/* argument to above functions, ctx pointer */
 	struct ctxop *next;	/* next context ops */
+	hrtime_t save_ts;		/* timestamp of last save */
+	hrtime_t restore_ts;		/* timestamp of last restore */
 } ctxop_t;
 
 /*
@@ -365,7 +371,7 @@ typedef struct _kthread {
 #define	T_WOULDBLOCK	0x0020	/* for lockfs */
 #define	T_DONTBLOCK	0x0040	/* for lockfs */
 #define	T_DONTPEND	0x0080	/* for lockfs */
-#define	T_SYS_PROF	0x0100	/* profiling on for duration of system call */
+#define	T_SPLITSTK	0x0100	/* kernel stack is currently split */
 #define	T_WAITCVSEM	0x0200	/* waiting for a lwp_cv or lwp_sema on sleepq */
 #define	T_WATCHPT	0x0400	/* thread undergoing a watchpoint emulation */
 #define	T_PANIC		0x0800	/* thread initiated a system panic */

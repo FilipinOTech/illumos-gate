@@ -165,6 +165,10 @@ static	int	sort_dstip __P((const void *, const void *));
 static	int	sort_dstpt __P((const void *, const void *));
 #endif
 
+#if SOLARIS
+#include "ipfzone.h"
+#endif
+
 
 static void usage(name)
 char *name;

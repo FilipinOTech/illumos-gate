@@ -87,6 +87,7 @@ DLIBSRCS += \
 	io.d \
 	ip.d \
 	iscsit.d \
+	mac.d \
 	net.d \
 	nfs.d \
 	nfssrv.d \
@@ -99,7 +100,8 @@ DLIBSRCS += \
 	sysevent.d \
 	tcp.d \
 	udp.d \
-	unistd.d
+	unistd.d \
+	vnd.d
 
 include ../../Makefile.lib
 
@@ -112,6 +114,7 @@ CLEANFILES += dt_lex.c dt_grammar.c dt_grammar.h y.output
 CLEANFILES += ../common/procfs.sed ../common/procfs.d
 CLEANFILES += ../common/io.sed ../common/io.d
 CLEANFILES += ../common/ip.sed ../common/ip.d
+CLEANFILES += ../common/mac.sed ../common/mac.d
 CLEANFILES += ../common/net.sed ../common/net.d
 CLEANFILES += ../common/errno.d ../common/signal.d
 CLEANFILES += ../common/dt_errtags.c ../common/dt_names.c
@@ -133,7 +136,7 @@ CERRWARN += -_gcc=-Wno-uninitialized
 CERRWARN += -_gcc=-Wno-switch
 
 YYCFLAGS =
-LDLIBS += -lgen -lproc -lrtld_db -lnsl -lsocket -lctf -lelf -lc
+LDLIBS += -lgen -lproc -lrtld_db -lnsl -lsocket -lctf -lelf -lc -lzonecfg
 DRTILDLIBS = $(LDLIBS.lib) -lc
 
 yydebug := YYCFLAGS += -DYYDEBUG
@@ -203,6 +206,9 @@ pics/dt_lex.o pics/dt_grammar.o := CCVERBOSE =
 
 ../common/ip.d: ../common/ip.sed ../common/ip.d.in
 	sed -f ../common/ip.sed < ../common/ip.d.in > $@
+
+../common/mac.d: ../common/mac.sed ../common/mac.d.in
+	sed -f ../common/mac.sed < ../common/mac.d.in > $@
 
 ../common/net.d: ../common/net.sed ../common/net.d.in
 	sed -f ../common/net.sed < ../common/net.d.in > $@

@@ -14,6 +14,7 @@
 # Copyright (c) 2012 by Delphix. All rights reserved.
 # Copyright 2014 Nexenta Systems, Inc.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright (c) 2014, Joyent, Inc.  All rights reserved.
 #
 
 include		$(SRC)/Makefile.master
@@ -41,8 +42,10 @@ MANFILES=	Intro.5			\
 		device_clean.5		\
 		dhcp.5			\
 		environ.5		\
+		epoll.5			\
 		eqn.5			\
 		eqnchar.5		\
+		eventfd.5		\
 		extendedFILE.5		\
 		filesystem.5		\
 		fnmatch.5		\
@@ -55,6 +58,7 @@ MANFILES=	Intro.5			\
 		iconv_unicode.5		\
 		ieee802.3.5		\
 		ieee802.11.5		\
+		inotify.5		\
 		ipfilter.5		\
 		isalist.5		\
 		kerberos.5		\

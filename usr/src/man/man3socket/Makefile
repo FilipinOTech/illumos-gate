@@ -155,9 +155,11 @@ ntohll.3socket			:= LINKSRC = byteorder.3socket
 ntohs.3socket			:= LINKSRC = byteorder.3socket
 
 ether_aton.3socket		:= LINKSRC = ethers.3socket
+ether_aton_r.3socket		:= LINKSRC = ethers.3socket
 ether_hostton.3socket		:= LINKSRC = ethers.3socket
 ether_line.3socket		:= LINKSRC = ethers.3socket
 ether_ntoa.3socket		:= LINKSRC = ethers.3socket
+ether_ntoa_r.3socket		:= LINKSRC = ethers.3socket
 ether_ntohost.3socket		:= LINKSRC = ethers.3socket
 
 freeaddrinfo.3socket		:= LINKSRC = getaddrinfo.3socket
