@@ -24,6 +24,7 @@
 # Copyright (c) 2012 by Delphix. All rights reserved.
 # Copyright (c) 2012, Joyent, Inc. All rights reserved.
 # Copyright (c) 2013 Gary Mills
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 
 include ../Makefile.master
 
@@ -154,7 +155,11 @@ SUBDIRS += \
 	librdc		\
 	libinstzones	\
 	libpkg		\
-	libpcidb
+	libpcidb	\
+	libm1		\
+	libm		\
+	libmvec
+
 
 SUBDIRS += \
 	passwdutil	\
@@ -166,7 +171,6 @@ SUBDIRS += \
 	libvolmgt	\
 	libdevice	\
 	libdevid	\
-	libdhcpsvc	\
 	libc_db		\
 	libndmp		\
 	libsec		\
@@ -174,7 +178,6 @@ SUBDIRS += \
 	libtnf		\
 	libtnfctl	\
 	libdhcpagent	\
-	libdhcpdu	\
 	libdhcputil	\
 	libxnet		\
 	libipsecutil	\
@@ -264,8 +267,6 @@ SUBDIRS += \
 	$($(MACH)_SUBDIRS)
 
 i386_SUBDIRS=		\
-	libntfs		\
-	libparted	\
 	libfdisk	\
 	libsaveargs
 
@@ -315,7 +316,6 @@ MSGSUBDIRS=		\
 	libcmd		\
 	libcontract	\
 	libcurses	\
-	libdhcpsvc 	\
 	libdhcputil	\
 	libipsecutil	\
 	libdiskmgt	\
@@ -395,7 +395,6 @@ HDRSUBDIRS=		\
 	libdll		\
 	libdlpi		\
 	libdhcpagent	\
-	libdhcpsvc	\
 	libdhcputil	\
 	libdisasm	\
 	libdns_sd	\
@@ -505,7 +504,6 @@ HDRSUBDIRS=		\
 	$($(MACH)_HDRSUBDIRS)
 
 i386_HDRSUBDIRS=	\
-	libparted	\
 	libfdisk	\
 	libsaveargs
 
@@ -563,7 +561,7 @@ _dc:			$(DCSUBDIRS:%=%-nodepend)
 auditd_plugins: libbsm libnsl libsecdb
 gss_mechs/mech_krb5:	libgss libnsl libsocket libresolv pkcs11
 libadt_jni:	libbsm
-libast: 	libsocket
+libast: 	libsocket libm
 libadutils: 	libldap5 libresolv libsocket libnsl
 nsswitch:	libadutils libidmap
 libbe: 		libzfs
@@ -574,7 +572,6 @@ libcontract:	libnvpair
 libdevid:	libdevinfo
 libdevinfo:	libnvpair libsec
 libdhcpagent:	libsocket libdhcputil libuuid libdlpi libcontract
-libdhcpsvc:	libinetutil
 libdhcputil:	libnsl libgen libinetutil libdlpi
 libdladm:	libdevinfo libinetutil libsocket libscf librcm libnvpair \
 		libexacct libnsl libkstat libcurses
@@ -592,6 +589,9 @@ libipadm:	libnsl libinetutil libsocket libdlpi libnvpair libdhcpagent \
 		libdladm libsecdb
 libiscsit:	libc libnvpair libstmf libuuid libnsl
 libkmf:		libcryptoutil pkcs11
+libm:		libc
+libm1:		libc libm
+libmvec:	libc libm
 libnsl:		libmd5
 libmapid:	libresolv
 librdc:		libsocket libnsl libnsctl libunistat libdscfg
@@ -605,7 +605,7 @@ libsecdb:	libnsl
 libsasl:	libgss libsocket pkcs11 libmd
 sasl_plugins:	pkcs11 libgss libsocket libsasl
 libsctp:	libsocket
-libshell:	libast libcmd libdll libsocket libsecdb
+libshell:	libast libcmd libdll libsocket libsecdb libm
 libsip:		libmd5
 libsmbfs:	libcmdutils libsocket libnsl libkrb5
 libsocket:	libnsl
@@ -637,7 +637,7 @@ pkcs11:		libcryptoutil
 print:		libldap5
 udapl/udapl_tavor:	udapl/libdat
 libzfs:		libdevid libgen libnvpair libuutil \
-		libadm libavl libefi libidmap libmd libzfs_core
+		libadm libavl libefi libidmap libmd libzfs_core libm
 libzfs_core:	libnvpair
 libzfs_jni:	libdiskmgt libnvpair libzfs
 libzpool:	libavl libumem libnvpair libcmdutils
@@ -666,6 +666,13 @@ libreparse:	libnvpair
 libhotplug:	libnvpair
 cfgadm_plugins:	libhotplug
 libilb:		libsocket
+libipmi:	libm
+libprtdiag:	libm
+libsqlite:	libm
+libstmf:	libm
+libvscan: 	libm
+
+
 $(INTEL_BUILD)libdiskmgt:libfdisk
 
 #

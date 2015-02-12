@@ -24,11 +24,11 @@
 .\" Copyright 2011 Joshua M. Clulow <josh@sysmgr.org>
 .\" Copyright (c) 2014 by Delphix. All rights reserved.
 .\" Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
-.\" Copyright 2013 Nexenta Systems, Inc.  All Rights Reserved.
 .\" Copyright (c) 2014, Joyent, Inc. All rights reserved.
 .\" Copyright (c) 2014 by Adam Stevko. All rights reserved.
+.\" Copyright 2014 Nexenta Systems, Inc.  All Rights Reserved.
 .\"
-.TH ZFS 1M "March 6, 2014"
+.TH ZFS 1M "November 11, 2014"
 .SH NAME
 zfs \- configures ZFS file systems
 .SH SYNOPSIS
@@ -119,7 +119,7 @@ zfs \- configures ZFS file systems
 
 .LP
 .nf
-\fBzfs\fR \fBinherit\fR [\fB-r\fR] \fIproperty\fR \fIfilesystem\fR|\fIvolume|snapshot\fR...
+\fBzfs\fR \fBinherit\fR [\fB-rS\fR] \fIproperty\fR \fIfilesystem\fR|\fIvolume|snapshot\fR...
 .fi
 
 .LP
@@ -176,12 +176,12 @@ zfs \- configures ZFS file systems
 
 .LP
 .nf
-\fBzfs\fR \fBsend\fR [\fB-DnPpRve\fR] [\fB-\fR[\fBiI\fR] \fIsnapshot\fR] \fIsnapshot\fR
+\fBzfs\fR \fBsend\fR [\fB-DnPpRveL\fR] [\fB-\fR[\fBiI\fR] \fIsnapshot\fR] \fIsnapshot\fR
 .fi
 
 .LP
 .nf
-\fBzfs\fR \fBsend\fR [\fB-e\fR] [\fB-i \fIsnapshot\fR|\fIbookmark\fR]\fR \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR
+\fBzfs\fR \fBsend\fR [\fB-eL\fR] [\fB-i \fIsnapshot\fR|\fIbookmark\fR]\fR \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR
 .fi
 
 .LP
@@ -1244,7 +1244,9 @@ significant performance gains. Use of this property for general purpose file
 systems is strongly discouraged, and may adversely affect performance.
 .sp
 The size specified must be a power of two greater than or equal to 512 and less
-than or equal to 128 Kbytes.
+than or equal to 128 Kbytes.  If the \fBlarge_blocks\fR feature is enabled
+on the pool, the size may be up to 1 Mbyte.  See \fBzpool-features\fR(5)
+for details on ZFS feature flags.
 .sp
 Changing the file system's \fBrecordsize\fR affects only files created
 afterward; existing files are unaffected.
@@ -2417,7 +2419,7 @@ property, the following columns are displayed:
      property  Property name
      value     Property value
      source    Property source. Can either be local, default,
-               temporary, inherited, or none (-).
+               temporary, inherited, received, or none (-).
 .fi
 .in -2
 .sp
@@ -2482,8 +2484,8 @@ is the default value.
 .RS 4n
 A comma-separated list of sources to display. Those properties coming from a
 source other than those in this list are ignored. Each source must be one of
-the following: \fBlocal,default,inherited,temporary,none\fR. The default value
-is all sources.
+the following: \fBlocal,default,inherited,received,temporary,none\fR. The
+default value is all sources.
 .RE
 
 .sp
@@ -2501,15 +2503,16 @@ Display numbers in parsable (exact) values.
 .sp
 .ne 2
 .na
-\fB\fBzfs inherit\fR [\fB-r\fR] \fIproperty\fR
+\fB\fBzfs inherit\fR [\fB-rS\fR] \fIproperty\fR
 \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR...\fR
 .ad
 .sp .6
 .RS 4n
-Clears the specified property, causing it to be inherited from an ancestor. If
-no ancestor has the property set, then the default value is used. See the
-"Properties" section for a listing of default values, and details on which
-properties can be inherited.
+Clears the specified property, causing it to be inherited from an ancestor,
+restored to default if no ancestor has the property set, or with the \fB-S\fR
+option reverted to the received value if one exists.  See the "Properties"
+section for a listing of default values, and details on which properties can be
+inherited.
 .sp
 .ne 2
 .na
@@ -2518,6 +2521,16 @@ properties can be inherited.
 .sp .6
 .RS 4n
 Recursively inherit the given property for all children.
+.RE
+.sp
+.ne 2
+.na
+\fB\fB-S\fR\fR
+.ad
+.sp .6
+.RS 4n
+Revert the property to the received value if one exists; otherwise operate as
+if the \fB-S\fR option was not specified.
 .RE
 
 .RE
@@ -2923,7 +2936,7 @@ See \fBzpool-features\fR(5) for details on ZFS feature flags and the
 .sp
 .ne 2
 .na
-\fBzfs send\fR [\fB-DnPpRve\fR] [\fB-\fR[\fBiI\fR] \fIsnapshot\fR] \fIsnapshot\fR
+\fBzfs send\fR [\fB-DnPpRveL\fR] [\fB-\fR[\fBiI\fR] \fIsnapshot\fR] \fIsnapshot\fR
 .ad
 .sp .6
 .RS 4n
@@ -2999,6 +3012,21 @@ will be much better if the filesystem uses a dedup-capable checksum (eg.
 .sp
 .ne 2
 .na
+\fB\fB-L\fR\fR
+.ad
+.sp .6
+.RS 4n
+Generate a stream which may contain blocks larger than 128KB.  This flag
+has no effect if the \fBlarge_blocks\fR pool feature is disabled, or if
+the \fRrecordsize\fR property of this filesystem has never been set above
+128KB.  The receiving system must have the \fBlarge_blocks\fR pool feature
+enabled as well.  See \fBzpool-features\fR(5) for details on ZFS feature
+flags and the \fBlarge_blocks\fR feature.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fB-e\fR\fR
 .ad
 .sp .6
@@ -3064,7 +3092,7 @@ on future versions of \fBZFS\fR.
 .sp
 .ne 2
 .na
-\fBzfs send\fR [\fB-e\fR] [\fB-i\fR \fIsnapshot\fR|\fIbookmark\fR] \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR
+\fBzfs send\fR [\fB-eL\fR] [\fB-i\fR \fIsnapshot\fR|\fIbookmark\fR] \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR
 .ad
 .sp .6
 .RS 4n
@@ -3090,6 +3118,21 @@ and following).
 If the incremental target is a clone, the incremental source can
 be the origin snapshot, or an earlier snapshot in the origin's filesystem,
 or the origin's origin, etc.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-L\fR\fR
+.ad
+.sp .6
+.RS 4n
+Generate a stream which may contain blocks larger than 128KB.  This flag
+has no effect if the \fBlarge_blocks\fR pool feature is disabled, or if
+the \fRrecordsize\fR property of this filesystem has never been set above
+128KB.  The receiving system must have the \fBlarge_blocks\fR pool feature
+enabled as well.  See \fBzpool-features\fR(5) for details on ZFS feature
+flags and the \fBlarge_blocks\fR feature.
 .RE
 
 .sp
@@ -3864,6 +3907,17 @@ inherit the \fBchecksum\fR property from their parent.
 .fi
 .in -2
 .sp
+.LP
+The following command causes \fBpool/home/bob\fR to revert to the received
+value for the \fBquota\fR property if it exists.
+
+.sp
+.in +2
+.nf
+# \fBzfs inherit -S quota pool/home/bob
+.fi
+.in -2
+.sp
 
 .LP
 \fBExample 12 \fRRemotely Replicating ZFS Data
@@ -4006,10 +4060,9 @@ permissions on \fBtank/cindys\fR are also displayed.
 .nf
 # \fBzfs allow cindys create,destroy,mount,snapshot tank/cindys\fR
 # \fBzfs allow tank/cindys\fR
--------------------------------------------------------------
-Local+Descendent permissions on (tank/cindys)
-          user cindys create,destroy,mount,snapshot
--------------------------------------------------------------
+---- Permissions on tank/cindys --------------------------------------
+Local+Descendent permissions:
+        user cindys create,destroy,mount,snapshot
 .fi
 .in -2
 .sp
@@ -4042,12 +4095,11 @@ The permissions on \fBtank/users\fR are also displayed.
 # \fBzfs allow staff create,mount tank/users\fR
 # \fBzfs allow -c destroy tank/users\fR
 # \fBzfs allow tank/users\fR
--------------------------------------------------------------
-Create time permissions on (tank/users)
-          create,destroy
-Local+Descendent permissions on (tank/users)
-          group staff create,mount
--------------------------------------------------------------
+---- Permissions on tank/users ---------------------------------------
+Permission sets:
+        destroy
+Local+Descendent permissions:
+        group staff create,mount
 .fi
 .in -2
 .sp
@@ -4066,14 +4118,11 @@ displayed.
 # \fBzfs allow -s @pset create,destroy,snapshot,mount tank/users\fR
 # \fBzfs allow staff @pset tank/users\fR
 # \fBzfs allow tank/users\fR
--------------------------------------------------------------
-Permission sets on (tank/users)
+---- Permissions on tank/users ---------------------------------------
+Permission sets:
         @pset create,destroy,mount,snapshot
-Create time permissions on (tank/users)
-        create,destroy
-Local+Descendent permissions on (tank/users)
-        group staff @pset,create,mount
--------------------------------------------------------------
+Local+Descendent permissions:
+        group staff @pset
 .fi
 .in -2
 .sp
@@ -4091,14 +4140,13 @@ also displayed.
 .nf
 # \fBzfs allow cindys quota,reservation users/home\fR
 # \fBzfs allow users/home\fR
--------------------------------------------------------------
-Local+Descendent permissions on (users/home)
+---- Permissions on users/home ---------------------------------------
+Local+Descendent permissions:
         user cindys quota,reservation
--------------------------------------------------------------
 cindys% \fBzfs set quota=10G users/home/marks\fR
 cindys% \fBzfs get quota users/home/marks\fR
-NAME              PROPERTY  VALUE             SOURCE
-users/home/marks  quota     10G               local
+NAME              PROPERTY  VALUE  SOURCE
+users/home/marks  quota     10G    local
 .fi
 .in -2
 .sp
@@ -4116,14 +4164,11 @@ The following example shows how to remove the snapshot permission from the
 .nf
 # \fBzfs unallow staff snapshot tank/users\fR
 # \fBzfs allow tank/users\fR
--------------------------------------------------------------
-Permission sets on (tank/users)
+---- Permissions on tank/users ---------------------------------------
+Permission sets:
         @pset create,destroy,mount,snapshot
-Create time permissions on (tank/users)
-        create,destroy
-Local+Descendent permissions on (tank/users)
-        group staff @pset,create,mount
--------------------------------------------------------------
+Local+Descendent permissions:
+        group staff @pset
 .fi
 .in -2
 .sp

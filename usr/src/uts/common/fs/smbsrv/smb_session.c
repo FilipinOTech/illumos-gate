@@ -28,6 +28,7 @@
 #include <sys/types.h>
 #include <sys/socketvar.h>
 #include <sys/sdt.h>
+#include <sys/random.h>
 #include <smbsrv/netbios.h>
 #include <smbsrv/smb_kproto.h>
 #include <smbsrv/string.h>
@@ -45,6 +46,7 @@ static smb_user_t *smb_session_lookup_user(smb_session_t *, char *, char *);
 static void smb_session_logoff(smb_session_t *);
 static void smb_request_init_command_mbuf(smb_request_t *sr);
 void dump_smb_inaddr(smb_inaddr_t *ipaddr);
+static void smb_session_genkey(smb_session_t *);
 
 void
 smb_session_timers(smb_llist_t *ll)
@@ -335,25 +337,14 @@ smb_session_xprt_puthdr(smb_session_t *session, smb_xprt_t *hdr,
 static void
 smb_request_init_command_mbuf(smb_request_t *sr)
 {
-	MGET(sr->command.chain, 0, MT_DATA);
 
 	/*
-	 * Setup mbuf, mimic MCLGET but use the complete packet buffer.
+	 * Setup mbuf using the buffer we allocated.
 	 */
-	sr->command.chain->m_ext.ext_buf = sr->sr_request_buf;
-	sr->command.chain->m_data = sr->command.chain->m_ext.ext_buf;
-	sr->command.chain->m_len = sr->sr_req_length;
-	sr->command.chain->m_flags |= M_EXT;
-	sr->command.chain->m_ext.ext_size = sr->sr_req_length;
-	sr->command.chain->m_ext.ext_ref = &mclrefnoop;
+	MBC_ATTACH_BUF(&sr->command, sr->sr_request_buf, sr->sr_req_length);
 
-	/*
-	 * Initialize the rest of the mbuf_chain fields
-	 */
 	sr->command.flags = 0;
-	sr->command.shadow_of = 0;
-	sr->command.max_bytes = sr->sr_req_length;
-	sr->command.chain_offset = 0;
+	sr->command.shadow_of = NULL;
 }
 
 /*
@@ -642,6 +633,8 @@ smb_session_create(ksocket_t new_so, uint16_t port, smb_server_t *sv,
 	session->opentime = now;
 	session->keep_alive = smb_keep_alive;
 	session->activity_timestamp = now;
+
+	smb_session_genkey(session);
 
 	smb_slist_constructor(&session->s_req_list, sizeof (smb_request_t),
 	    offsetof(smb_request_t, sr_session_lnd));
@@ -1213,4 +1206,18 @@ smb_session_oplock_break(smb_session_t *session,
 		SMB_PANIC();
 	}
 	smb_rwx_rwexit(&session->s_lock);
+}
+
+static void
+smb_session_genkey(smb_session_t *session)
+{
+	uint8_t		tmp_key[SMB_CHALLENGE_SZ];
+
+	(void) random_get_pseudo_bytes(tmp_key, SMB_CHALLENGE_SZ);
+	bcopy(tmp_key, &session->challenge_key, SMB_CHALLENGE_SZ);
+	session->challenge_len = SMB_CHALLENGE_SZ;
+
+	(void) random_get_pseudo_bytes(tmp_key, 4);
+	session->sesskey = tmp_key[0] | tmp_key[1] << 8 |
+	    tmp_key[2] << 16 | tmp_key[3] << 24;
 }

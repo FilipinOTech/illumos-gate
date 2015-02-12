@@ -139,8 +139,6 @@ MANFILES=	acctcom.1			\
 	 	fmtmsg.1			\
 	 	fold.1				\
 	 	ftp.1				\
-	 	ftpcount.1			\
-	 	ftpwho.1			\
 	 	gcore.1				\
 	 	gencat.1			\
 	 	genmsg.1			\
@@ -184,6 +182,7 @@ MANFILES=	acctcom.1			\
 	 	krb5-config.1			\
 	 	ksh93.1				\
 	 	ktutil.1			\
+		kvmstat.1			\
 	 	lari.1				\
 	 	last.1				\
 	 	lastcomm.1			\

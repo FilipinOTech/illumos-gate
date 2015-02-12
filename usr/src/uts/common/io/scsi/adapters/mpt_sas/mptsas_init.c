@@ -311,7 +311,7 @@ mptsas_ioc_do_get_facts_reply(mptsas_t *mpt, caddr_t memp, int var,
 		    mpt->m_instance);
 		mpt->m_MPI25 = TRUE;
 	} else {
-		mptsas_log(mpt, CE_NOTE, "?mpt%d MPI Version 0x%x\n",
+		mptsas_log(mpt, CE_NOTE, "?mpt_sas%d MPI Version 0x%x\n",
 		    mpt->m_instance, msgversion);
 	}
 
@@ -656,7 +656,8 @@ mptsas_do_ioc_init(mptsas_t *mpt, caddr_t memp, int var,
 	 * These addresses are set using the DMA cookie addresses from when the
 	 * memory was allocated.  Sense buffer hi address should be 0.
 	 */
-	ddi_put32(accessp, &init->SenseBufferAddressHigh, 0);
+	ddi_put32(accessp, &init->SenseBufferAddressHigh,
+	    (uint32_t)(mpt->m_req_sense_dma_addr >> 32));
 	ddi_put32(accessp, &init->SystemReplyAddressHigh,
 	    (uint32_t)(mpt->m_reply_frame_dma_addr >> 32));
 	ddi_put32(accessp, &init->SystemRequestFrameBaseAddress.High,

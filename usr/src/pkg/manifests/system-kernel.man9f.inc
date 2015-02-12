@@ -55,6 +55,7 @@ file path=usr/share/man/man9f/btopr.9f
 file path=usr/share/man/man9f/bufcall.9f
 file path=usr/share/man/man9f/bzero.9f
 file path=usr/share/man/man9f/canput.9f
+file path=usr/share/man/man9f/canputnext.9f
 file path=usr/share/man/man9f/clrbuf.9f
 file path=usr/share/man/man9f/cmn_err.9f
 file path=usr/share/man/man9f/condvar.9f
@@ -594,6 +595,7 @@ link path=usr/share/man/man9f/atomic_swap_uchar.9f target=atomic_swap.9f
 link path=usr/share/man/man9f/atomic_swap_uint.9f target=atomic_swap.9f
 link path=usr/share/man/man9f/atomic_swap_ulong.9f target=atomic_swap.9f
 link path=usr/share/man/man9f/atomic_swap_ushort.9f target=atomic_swap.9f
+link path=usr/share/man/man9f/bcanputnext.9f target=canputnext.9f
 link path=usr/share/man/man9f/crgetgid.9f target=ddi_cred.9f
 link path=usr/share/man/man9f/crgetgroups.9f target=ddi_cred.9f
 link path=usr/share/man/man9f/crgetngroups.9f target=ddi_cred.9f
@@ -866,6 +868,7 @@ link path=usr/share/man/man9f/ddi_umem_free.9f target=ddi_umem_alloc.9f
 link path=usr/share/man/man9f/ddi_umem_unlock.9f target=ddi_umem_lock.9f
 link path=usr/share/man/man9f/ddi_unmap_regs.9f target=ddi_map_regs.9f
 link path=usr/share/man/man9f/desballoc.9f target=esballoc.9f
+link path=usr/share/man/man9f/dev_err.9f target=cmn_err.9f
 link path=usr/share/man/man9f/devmap_load.9f target=devmap_unload.9f
 link path=usr/share/man/man9f/devmap_umem_setup.9f \
     target=devmap_devmem_setup.9f
@@ -1233,5 +1236,6 @@ link path=usr/share/man/man9f/va_copy.9f target=va_arg.9f
 link path=usr/share/man/man9f/va_end.9f target=va_arg.9f
 link path=usr/share/man/man9f/va_start.9f target=va_arg.9f
 link path=usr/share/man/man9f/vcmn_err.9f target=cmn_err.9f
+link path=usr/share/man/man9f/vzcmn_err.9f target=cmn_err.9f
 link path=usr/share/man/man9f/wr.9f target=WR.9f
 link path=usr/share/man/man9f/zcmn_err.9f target=cmn_err.9f
